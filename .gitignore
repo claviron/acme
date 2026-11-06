@@ -1,0 +1,109 @@
+# --- Rust / Cargo ---
+/target/
+/target-native/
+
+# --- Build output ---
+/build/
+/build-*/
+cmake-build-*/
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# --- CMake / native tooling ---
+vcpkg_installed/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+compile_commands.json
+.cache/
+
+# --- PHP / Composer ---
+/vendor/
+composer.phar
+.phpunit.cache/
+.phpunit.result.cache
+.php-cs-fixer.cache
+.php_cs.cache
+
+# Generated PHP from .proto — keep proto/ as the source of truth.
+# /php/Claviron/Proto/
+# /php/GPBMetadata/
+
+# --- Runtime / sockets / pids / logs ---
+*.sock
+*.pid
+*.lock
+*.log
+logs/
+/tmp/
+tmp/
+/tests/result*.txt
+
+# --- Secrets & local config ---
+.env
+.env.*
+!.env.example
+*.env
+*.key
+*.pem
+*.pfx
+*.p12
+*.local
+/*.local
+
+# Keep public certs explicitly if you want them tracked.
+!etc/ssl/ca.crt
+!etc/ssl/client.crt
+!etc/ssl/fullchain.pem
+
+# --- Editor / IDE ---
+/.idea/
+/.vscode/*
+!/.vscode/settings.json
+!/.vscode/tasks.json
+!/.vscode/launch.json
+!/.vscode/extensions.json
+!/.vscode/*.code-snippets
+/.nvimlog
+/.venv/
+.history/
+.vs/
+*.swp
+*.swo
+*.swn
+*~
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Misc local ---
+*.bak
+*.orig
+*.rej
+core
+core.*
+
+# --- docs
+*.md
+!README.md
+!SKILL.md
+!CONTRIBUTING.md
+/Cargo.lock
+
+/.cargo/config.toml
+
+/AGENTS.local.md
+
+*.local.sh

@@ -1,0 +1,42 @@
+# Formatting rules. The same file is kept in every project.
+#
+# Everything here is applied by the stable rustfmt, so `cargo fmt` and
+# `rust-format.sh -p <crate>` produce the same result and no nightly toolchain
+# is involved.
+
+# Language and style edition
+edition = "2024"                    # Parse as Rust 2024 when rustfmt runs outside Cargo
+style_edition = "2024"              # 2024 style rules, stated rather than inherited from `edition`
+
+# Whitespace
+newline_style = "Unix"              # LF everywhere; the tree is shared with Linux and FreeBSD hosts
+hard_tabs = false                   # Indent with spaces
+tab_spaces = 4
+
+# Width
+max_width = 80
+use_small_heuristics = "Max"        # Short constructs may use the whole line before they break
+
+# Functions
+fn_params_layout = "Vertical"       # One parameter per line as soon as there is more than one
+force_explicit_abi = true           # Always name the ABI: `extern "C"`, never a bare `extern`
+
+# Shorthands
+use_field_init_shorthand = true     # `Point { x, y }`, not `Point { x: x, y: y }`
+use_try_shorthand = true            # `expr?`, not `try!(expr)`
+
+# Literals
+hex_literal_case = "Lower"          # `0xff`, not `0xFF`
+
+# Imports
+reorder_imports = true              # Sort imports within each group
+
+# Not set: rustfmt applies these only on a nightly toolchain, and none is
+# installed. Until 2026-10-04 this file carried them, so older code has no
+# trailing commas and one `use` per module; rustfmt now adds the commas and
+# leaves import grouping as it finds it.
+#
+#   trailing_comma, imports_granularity, group_imports, reorder_impl_items,
+#   wrap_comments, format_code_in_doc_comments, normalize_doc_attributes,
+#   format_macro_matchers, condense_wildcard_suffixes,
+#   struct_field_align_threshold, enum_discrim_align_threshold
