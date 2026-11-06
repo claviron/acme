@@ -4,8 +4,8 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
-use claviron::edge::pipeline::HostPipelineBuilder;
 use claviron::http::boxed_body;
+use claviron::pipeline::plan::HostPipelineBuilder;
 use http_body_util::BodyExt;
 
 struct Storage {
@@ -188,11 +188,11 @@ struct NonServingHarness {
     connection: Arc<claviron::http::ext::ConnCtx>,
 }
 
-impl claviron::edge::pipeline::HostHandler for NonServingHarness {
+impl claviron::pipeline::HostHandler for NonServingHarness {
     fn call(
         &self,
         request: HostRequest,
-    ) -> claviron::edge::pipeline::HostHandlerFuture {
+    ) -> claviron::pipeline::HostHandlerFuture {
         let owner = self.clone();
         Box::pin(async move {
             owner
@@ -214,8 +214,8 @@ impl claviron::edge::pipeline::HostHandler for NonServingHarness {
 
 #[tokio::test]
 async fn non_serving_http01_answers_before_policy_for_every_admitted_host() {
-    use claviron::edge::pipeline::HostHandler;
     use claviron::http::ext::{ConnCtx, HostKey};
+    use claviron::pipeline::HostHandler;
     let storage = storage();
     let interceptor =
         Arc::new(Http01Layer::from(storage.clone() as Arc<dyn Http01Storage>));

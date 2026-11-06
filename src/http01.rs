@@ -8,15 +8,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use claviron::edge::extension::RouteLayer;
-use claviron::edge::pipeline::{
-    DispatchCall, HostHandlerResult, HostLayer, HostLayerBuilder, HostRequest,
-    InterceptsNonServing, NonServingContext,
+use claviron::edge::{
+    Host, HostConfig, InterceptsNonServing, NonServingContext, Routable,
 };
-use claviron::edge::{Host, HostConfig, Routable, RouteProtocol};
 use claviron::http::{
     RouteBody, RouteResponse, ServiceResult, bytes_body, empty_body, err_status,
 };
+use claviron::pipeline::extension::RouteLayer;
+use claviron::pipeline::factory::RouteProtocol;
+use claviron::pipeline::layers::HostLayer;
+use claviron::pipeline::plan::HostLayerBuilder;
+use claviron::pipeline::{DispatchCall, HostHandlerResult, HostRequest};
 use claviron::runtime::{AppState, registry};
 use http::{Method, Request, Response, StatusCode, header};
 
@@ -123,7 +125,7 @@ impl RouteLayer for Http01Layer {
     fn prepare(
         &self,
         layer: &mut HostLayerBuilder,
-    ) -> claviron::edge::Result<()> {
+    ) -> claviron::pipeline::Result<()> {
         let storage = self.storage.clone();
         layer.request(move |request: Request<RouteBody>| {
             let head_only = match select(request.method(), request.uri().path())
@@ -162,7 +164,7 @@ impl HostLayer for Http01Layer {
     fn prepare(
         self,
         layer: &mut HostLayerBuilder,
-    ) -> claviron::edge::Result<()> {
+    ) -> claviron::pipeline::Result<()> {
         RouteLayer::prepare(&self, layer)
     }
 }
