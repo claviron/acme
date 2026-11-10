@@ -220,6 +220,7 @@ async fn non_serving_http01_answers_before_policy_for_every_admitted_host() {
     let interceptor =
         Arc::new(Http01Layer::from(storage.clone() as Arc<dyn Http01Storage>));
     let connection = Arc::new(ConnCtx {
+        transport: claviron::http::listener::ListenerTransport::Tcp,
         state: Default::default(),
         listener: "plain".parse().unwrap(),
         proto: Some(claviron::http::listener::HttpProtocol::H1),
