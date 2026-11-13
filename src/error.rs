@@ -27,9 +27,9 @@ pub enum AcmeError {
     ClientCreationFailed(String),
 
     #[error(
-        "Certificate for `{cn}` not due yet (expires in {days_until_expiry} days)"
+        "Certificate for `{cn}` is outside the renewal window (expires at {expires_at})"
     )]
-    RenewalNotDue { cn: String, days_until_expiry: i64 },
+    RenewalNotDue { cn: String, expires_at: time::OffsetDateTime },
 
     #[error("certificate failed: {0}")]
     CertificateFailed(String),

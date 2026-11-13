@@ -50,15 +50,14 @@ pub async fn acme_renew(
         claviron::tasks::Error::other(format!("acme_renew: {error}"))
     })?;
 
-    let days_before_expiry = acme_cfg.renew_before as i64;
-
     debug!(
-        "🔍 acme_renew: Retrieving certificates expiring within {} days",
-        days_before_expiry
+        renew_before = ?acme_cfg.renew_before,
+        "acme_renew: retrieving certificates within the renewal window"
     );
 
-    let threshold = time::OffsetDateTime::now_utc()
-        + time::Duration::days(days_before_expiry);
+    let window = time::Duration::try_from(acme_cfg.renew_before)
+        .unwrap_or(time::Duration::MAX);
+    let threshold = time::OffsetDateTime::now_utc().saturating_add(window);
     let certs = hosting
         .acme_certificates(true, Some(threshold))
         .await

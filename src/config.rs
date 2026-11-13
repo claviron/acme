@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use claviron::helpers::de::deserialize_duration;
+use claviron::helpers::de::{deserialize_duration, parse_duration};
 use claviron::ssl::certstore::{
     FULLCHAIN_CERT_FILENAME, PRIVKEY_FILENAME, SERVER_CERTS_DIRNAME,
 };
@@ -52,7 +52,8 @@ pub struct AcmeConfig {
     /// Check reachability using the selected challenge method.
     #[serde(default, rename = "pre-validation", alias = "prevalidation")]
     pub pre_validation: bool,
-    pub renew_before: u32,
+    #[serde(deserialize_with = "deserialize_renew_before")]
+    pub renew_before: Duration,
     #[serde(alias = "algo", alias = "algorithm")]
     pub alg: Algorithm,
 
@@ -89,6 +90,48 @@ struct Dns01Config {
     visibility_timeout: Duration,
     #[serde(deserialize_with = "deserialize_duration")]
     check_interval: Duration,
+}
+
+fn deserialize_renew_before<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RenewalWindow {
+        Days(u32),
+        Duration(String),
+    }
+
+    match RenewalWindow::deserialize(deserializer)? {
+        RenewalWindow::Days(days) => Ok(Duration::from_secs(u64::from(days) * 86_400)),
+        RenewalWindow::Duration(text) => parse_duration(&text).map_err(serde::de::Error::custom),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renewal_window_accepts_hours_and_legacy_days() {
+        #[derive(Deserialize)]
+        struct Config {
+            #[serde(deserialize_with = "deserialize_renew_before")]
+            renew_before: Duration,
+        }
+
+        for (yaml, secs) in [
+            ("renew_before: 3", 259_200),
+            ("renew_before: 3d", 259_200),
+            ("renew_before: 72h", 259_200),
+            ("renew_before: 3h", 10_800),
+        ] {
+            let config: Config = serde_yaml::from_str(yaml).unwrap();
+            assert_eq!(config.renew_before, Duration::from_secs(secs));
+        }
+        assert!(serde_yaml::from_str::<Config>("renew_before: -3").is_err());
+    }
 }
 
 fn default_rate_limit_window() -> Duration {

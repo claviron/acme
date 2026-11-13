@@ -364,20 +364,20 @@ pub async fn renew_cert_to_db_with_challenge(
             AcmeError::from(format!("Certificate '{}' not found", cn))
         })?;
     acme_account_id(hosting, &hosted.certificate).await?;
-    let renew_before = renew_before_days.unwrap_or(cfg.renew_before);
-    let days_until_expiry = (hosted.certificate.expires_at
-        - OffsetDateTime::now_utc())
-    .whole_days();
-    if days_until_expiry > i64::from(renew_before) {
+    let renew_before = renew_before_days
+        .map(|days| std::time::Duration::from_secs(u64::from(days) * 86_400))
+        .unwrap_or(cfg.renew_before);
+    let remaining = hosted.certificate.expires_at - OffsetDateTime::now_utc();
+    if remaining > renew_before {
         return Err(AcmeError::RenewalNotDue {
             cn: cn.to_string(),
-            days_until_expiry,
+            expires_at: hosted.certificate.expires_at,
         });
     }
-    if days_until_expiry < 0 {
-        warn!(cn = %cn, days_expired = days_until_expiry.unsigned_abs(), "renewing expired certificate");
+    if remaining.is_negative() {
+        warn!(cn = %cn, expired_for = ?remaining.unsigned_abs(), "renewing expired certificate");
     } else {
-        debug!(cn = %cn, days_until_expiry, "renewing certificate");
+        debug!(cn = %cn, remaining = ?remaining.unsigned_abs(), "renewing certificate");
     }
     renew_cert_from_db_with_challenge(acme_store, hosting, cfg, hosted, enforce_throttle, challenge).await
 }

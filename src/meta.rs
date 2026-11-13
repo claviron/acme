@@ -107,14 +107,9 @@ impl CertMeta {
 
     pub fn should_be_renewed(
         &self,
-        days_before_renewal: u32,
+        renew_before: std::time::Duration,
     ) -> bool {
-        let now = OffsetDateTime::now_utc();
-        if now >= self.valid_until {
-            return true; // already expired or exactly at expiry => renew
-        }
-        let remaining = self.valid_until - now; // time::Duration
-        remaining <= time::Duration::days(days_before_renewal as i64)
+        (self.valid_until - OffsetDateTime::now_utc()) <= renew_before
     }
 
     pub fn update_with_renewed(
