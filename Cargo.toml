@@ -1,6 +1,6 @@
 [package]
 name = "claviron-acme"
-version = "0.2.0-alpha.26"
+version = "0.2.1"
 publish = true
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/claviron/acme"
@@ -30,7 +30,7 @@ server = [
 
 [dependencies]
 
-claviron = { version = "0.2.0-alpha.26", default-features = false, features = ["ssl"] }
+claviron = { version = "0.2.1", default-features = false, features = ["ssl"] }
 
 sqlx = { version = "0.9", optional = true, features = ["runtime-tokio", "postgres", "uuid", "time"] }
 tokio-util = { version = "0.7", optional = true, features = ["rt"] }
