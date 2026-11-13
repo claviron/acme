@@ -61,8 +61,14 @@ pub enum AcmeError {
     #[error("Invalid order status")]
     InvalidOrderStatus,
 
-    #[error("HTTP-01 challenge token must be nonempty unpadded base64url")]
+    #[error("ACME challenge token must be nonempty unpadded base64url")]
     InvalidChallengeToken,
+
+    #[error("DNS-01 requires a TXT publisher")]
+    MissingTxtPublisher,
+
+    #[error("DNS-01 TXT publication failed: {0}")]
+    Dns01(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     #[error("Request signing error: {0}")]
     SignRequest(String),

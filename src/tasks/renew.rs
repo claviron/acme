@@ -11,14 +11,19 @@ pub async fn acme_renew(
     state: AppState,
     _token: CancellationToken,
 ) -> TaskResult<()> {
+    use crate::AcmeProvider;
     use crate::AcmeStore;
-    use crate::actions::database::renew_cert_from_db;
+    use crate::actions::database::renew_cert_from_db_with_challenge;
     const CONCURRENT_TASK_COUNT: usize = 2;
 
     let Some(acme_cfg) = acme_config(&state)? else {
         debug!("acme_renew: acme.yaml missing; skipping");
         return Ok(());
     };
+    let acme =
+        state.registry_ref().resolve::<AcmeProvider>().ok_or_else(|| {
+            claviron::tasks::Error::other("AcmeService is not registered")
+        })?;
 
     use claviron::db::DbService;
     let db_service =
@@ -81,13 +86,25 @@ pub async fn acme_renew(
         let hosting = hosting.clone();
         let acme_store = acme_store.clone();
         let cfg = acme_cfg.clone();
+        let acme = acme.clone();
 
         tasks.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap(); // limit
             let cn = cert.certificate.cn.clone();
-            match renew_cert_from_db(&acme_store, &hosting, &cfg, cert, true)
+            let result = async {
+                let challenge = acme.order_challenge(&cfg)?;
+                renew_cert_from_db_with_challenge(
+                    &acme_store,
+                    &hosting,
+                    &cfg,
+                    cert,
+                    true,
+                    challenge,
+                )
                 .await
-            {
+            }
+            .await;
+            match result {
                 Ok(_) => Ok(cn),
                 Err(err) => Err(RenewalError { cn, source: err }),
             }

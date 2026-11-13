@@ -1,5 +1,112 @@
 use super::*;
 
+#[tokio::test]
+async fn dns01_waits_for_visibility_before_asking_the_ca() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::cryptex::keys::generate_acme_key_with_jwk;
+    use crate::dns01::{
+        PublishError, TxtPublication, TxtPublisher, Visibility,
+    };
+    use crate::issuer::{self, Reply, order_replies};
+    use claviron::ssl::{Organization, generators};
+    use tokio::sync::{Notify, Semaphore};
+
+    struct Publisher {
+        waiting: Notify,
+        visible: Semaphore,
+        removed: AtomicBool,
+    }
+
+    #[derive(Clone)]
+    struct Publication(std::sync::Arc<Publisher>);
+
+    #[async_trait::async_trait]
+    impl TxtPublisher for Publication {
+        async fn publish(
+            &self,
+            record: TxtRecord,
+        ) -> Result<Box<dyn TxtPublication>, PublishError> {
+            assert_eq!(record.owner(), "_acme-challenge.example.test.");
+            assert_eq!(record.value().len(), 43);
+            Ok(Box::new(self.clone()))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TxtPublication for Publication {
+        async fn wait_visible(
+            &self,
+            _: Visibility,
+        ) -> Result<(), PublishError> {
+            self.0.waiting.notify_one();
+            self.0.visible.acquire().await?.forget();
+            Ok(())
+        }
+
+        async fn remove(self: Box<Self>) -> Result<(), PublishError> {
+            self.0.removed.store(true, Ordering::Release);
+            Ok(())
+        }
+    }
+
+    let publisher = Publication(std::sync::Arc::new(Publisher {
+        waiting: Notify::new(),
+        visible: Semaphore::new(0),
+        removed: AtomicBool::new(false),
+    }));
+    let (key, jwk) = generate_acme_key_with_jwk(&Algorithm::ES256).unwrap();
+    let csr_key = generators::generate_private_key().unwrap();
+    let csr = generators::generate_server_csr(
+        &csr_key,
+        &"example.test".parse().unwrap(),
+        vec!["*.example.test".into()],
+        &Organization::default(),
+    )
+    .unwrap();
+    let mut replies = order_replies("issued", false);
+    replies[3] = Reply::new("/auth", 200, json!({
+        "status": "pending",
+        "identifier": {"type": "dns", "value": "example.test"},
+        "wildcard": true,
+        "challenges": [{"type": "dns-01", "token": "fixture", "url": "http://issuer.test/challenge"}],
+    }).to_string());
+    let (http, mut mock) = issuer::scripted(replies).await;
+    let client = CertClient::with_client(
+        http,
+        &key,
+        "http://issuer.test/acme/account/1",
+    )
+    .unwrap();
+    let mut issuance = std::pin::pin!(
+        client.request_certificate_with_challenge(
+            csr.der(),
+            &jwk,
+            OrderChallenge::Dns01(Dns01::new(
+                &publisher,
+                Visibility::new(
+                    Duration::from_secs(60),
+                    Duration::from_secs(1)
+                )
+                .unwrap()
+            )),
+        )
+    );
+    tokio::select! {
+        result = &mut issuance => panic!("order finished before TXT publication: {result:?}"),
+        () = publisher.0.waiting.notified() => {}
+    }
+    assert!(matches!(
+        mock.entered.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    publisher.0.visible.add_permits(1);
+    assert_eq!(issuance.await.unwrap(), "issued");
+    mock.entered.await.unwrap();
+    mock.task.await.unwrap();
+    assert!(publisher.0.removed.load(Ordering::Acquire));
+}
+
 #[test]
 fn acme_authority_rejects_invalid_account_urls_without_panicking() {
     let http = AcmeClient::builder().no_proxy().build().unwrap();

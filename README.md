@@ -159,10 +159,27 @@ hosting certificate lifecycle rather than directly editing the TLS resolver.
 The [gRPC extension](https://github.com/claviron/grpc) can expose these operations when its
 `acme` feature and the ACME provider are installed.
 
+### DNS-01
+
+With `server`, bind a `dns01::TxtPublisher` in the runtime registry before
+registering the ACME provider. Select `method: dns-01` in `acme.yaml`
+and declare `visibility_timeout` and `check_interval` in its `dns:` block. The same method
+applies to new orders and renewal. HTTP-01 is the default for orders, and
+`method: http-0` also enables the HTTP challenge route. With DNS-01,
+`pre-validation: true` requires the `resolver` feature and verifies the TXT
+value through the system-configured resolver before starting CA validation.
+
+For direct use, pass `OrderChallenge::Dns01(Dns01::new(&publisher, visibility))` to
+`CertClient::request_certificate_with_challenge`. The publisher appends one
+TXT value and returns a publication that owns its cleanup. ACME waits for
+that publication to confirm authoritative DNS visibility before asking the CA
+to validate. DNS server configuration and propagation checks belong to the
+publisher.
+
 ## Boundaries
 
-Only HTTP-01 challenges are implemented: no DNS-01, TLS-ALPN-01, wildcard
-issuance through DNS-01, external account binding, or account-key rollover.
+HTTP-01 and DNS-01 are implemented. TLS-ALPN-01, external account binding,
+and account-key rollover are outside the current API.
 ES384 and EdDSA account generation/signing are not implemented.
 
 The file issuance helper does not persist staging certificates, and file renewal

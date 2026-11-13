@@ -4,6 +4,7 @@ pub mod actions;
 pub mod clients;
 pub mod config;
 pub mod cryptex;
+pub mod dns01;
 mod error;
 #[cfg(feature = "http-0")]
 pub mod http01;

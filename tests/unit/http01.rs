@@ -300,7 +300,7 @@ async fn non_serving_http01_answers_before_policy_for_every_admitted_host() {
 }
 
 #[test]
-fn absent_http01_method_omits_non_serving_storage_preparation() {
+fn only_http01_method_prepares_non_serving_storage() {
     let state = AppState::standalone("http01-method", ".");
     let mut config: AcmeConfig = serde_yaml::from_str(
         r#"
@@ -323,6 +323,10 @@ method: http-0
     // An active method needs storage. Inactive selection must not try to
     // acquire it; this fixture intentionally declares no directory or store.
     assert!(prepare_non_serving_config(&state, Some(&config)).is_err());
+    config.method = Some(ChallengeMethod::Dns01);
+    assert!(
+        prepare_non_serving_config(&state, Some(&config)).unwrap().is_none()
+    );
     config.method = None;
     assert!(
         prepare_non_serving_config(&state, Some(&config)).unwrap().is_none()

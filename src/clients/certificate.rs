@@ -10,10 +10,26 @@ use url::Url;
 
 use crate::AcmeError;
 use crate::clients::AcmeClient;
-use crate::clients::challenge::Challenge;
+use crate::clients::challenge::{Challenge as ChallengeFile, valid_token};
 use crate::clients::http::checked_response;
 use crate::cryptex::jwk::AcmeJwk;
 use crate::cryptex::signing::{sign_payload, thumbprint};
+use crate::dns01::{Dns01, TxtRecord};
+
+/// How to present the proof for a certificate order.
+pub enum OrderChallenge<'a> {
+    Http01(&'a Path),
+    Dns01(Dns01<'a>),
+}
+
+impl OrderChallenge<'_> {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Http01(_) => "http-01",
+            Self::Dns01(..) => "dns-01",
+        }
+    }
+}
 
 /// Long-lived client for the **certificate order** legs of ACME
 /// (RFC 8555 §7.4 and §8). Holds the account's signing key plus the
@@ -24,10 +40,8 @@ use crate::cryptex::signing::{sign_payload, thumbprint};
 ///
 /// 1. `POST newOrder` with the SNI list → returns an order URL plus
 ///    one `authorization` URL per identifier.
-/// 2. For each authorization: pick the `http-01` challenge, write
-///    `<token>` → `<token>.<jwk_thumbprint>` to the challenges
-///    directory, then `POST` the challenge URL to ask the CA to
-///    validate.
+/// 2. Present the selected challenge and wait until the proof is ready,
+///    then `POST` the challenge URL to ask the CA to validate.
 /// 3. Poll the challenge status (capped backoff, 90s overall
 ///    deadline) until `valid` or `invalid`.
 /// 4. Once all authorizations are valid: poll the order until
@@ -35,12 +49,9 @@ use crate::cryptex::signing::{sign_payload, thumbprint};
 /// 5. Poll the order until `valid`, then `GET certificate` URL to
 ///    fetch the issued PEM chain.
 ///
-/// `challenge_dir` must be a path the **public-facing claviron-hyper
-/// listener** serves under `/.well-known/acme-challenge/` — that's
-/// the cooperation contract between this crate and the cleartext
-/// listener that handles port-80 traffic. CAs reach the challenge
-/// files via plaintext HTTP, so port 80 must be open for ACME to
-/// work end-to-end.
+/// For HTTP-01, the application serves the challenge directory at
+/// `/.well-known/acme-challenge/` on port 80. For DNS-01, use
+/// [`Self::request_certificate_with_challenge`] with a TXT publisher.
 ///
 /// The function returns the full PEM chain (leaf + intermediates) on
 /// success; persistence is the caller's job — file-based path writes
@@ -87,6 +98,20 @@ impl CertClient {
         p_csr_der: &[u8],
         jwk: &AcmeJwk,
         challenge_dir: impl AsRef<Path>,
+    ) -> Result<String, AcmeError> {
+        self.request_certificate_with_challenge(
+            p_csr_der,
+            jwk,
+            OrderChallenge::Http01(challenge_dir.as_ref()),
+        )
+        .await
+    }
+
+    pub async fn request_certificate_with_challenge(
+        &self,
+        p_csr_der: &[u8],
+        jwk: &AcmeJwk,
+        method: OrderChallenge<'_>,
     ) -> Result<String, AcmeError> {
         let alg = jwk.alg();
         // NOTE: we reuse `alg` for all ACME calls in this flow to avoid recomputation
@@ -146,80 +171,89 @@ impl CertClient {
                 continue;
             }
 
+            let kind = method.kind();
             let challenge = auth["challenges"]
                 .as_array()
                 .ok_or("Challenges not found")?
                 .iter()
-                .find(|c| c["type"] == "http-01")
-                .ok_or("HTTP-01 challenge not found")?;
+                .find(|c| c["type"] == kind)
+                .ok_or_else(|| format!("{kind} challenge not found"))?;
 
             let token = challenge["token"]
                 .as_str()
                 .ok_or("Challenge Token not found in response")?;
+            if !valid_token(token) {
+                return Err(AcmeError::InvalidChallengeToken);
+            }
+            let challenge_url =
+                challenge["url"].as_str().ok_or("Challenge URL not found")?;
             let key_authorization = format!("{}.{}", token, thumbprint(jwk)?);
-            let _file = Challenge::create(
-                challenge_dir.as_ref(),
-                token,
-                key_authorization,
-            )
-            .await?;
-
-            debug!("Waiting for challenge to be validated");
-
-            self.send_signed_request(
-                challenge["url"].as_str().ok_or("Challenge URL not found")?,
-                Some(&json!({})),
-                &alg,
-            )
-            .await?;
-
-            // Bound the validation wait with an overall deadline.
-            // Compile-time default; promote to `AcmeConfig` if operator
-            // tuning becomes necessary. Runtime env reads are not
-            // allowed (claviron worker scrubs libc env post-boot).
-            let max_secs: u64 = 90;
-            let started = Instant::now();
-            let mut backoff = Duration::from_secs(1);
-
-            loop {
-                let challenge_status_resp = self
-                    .send_signed_request(
-                        challenge["url"]
-                            .as_str()
-                            .ok_or("Challenge URL not found")?,
-                        None,
-                        &alg,
+            match &method {
+                OrderChallenge::Http01(directory) => {
+                    let _file = ChallengeFile::create(
+                        directory,
+                        token,
+                        key_authorization,
                     )
                     .await?;
-                let challenge_status_text =
-                    challenge_status_resp.text().await?;
-                let challenge_status: serde_json::Value =
-                    serde_json::from_str(&challenge_status_text)?;
-
-                match challenge_status["status"].as_str() {
-                    Some("valid") => break,
-                    Some("invalid") => {
-                        let err = challenge_status["error"].clone();
-                        error!("challenge became invalid: {}", err);
-                        return Err(AcmeError::InvalidOrderStatus);
+                    self.validate_challenge(challenge_url, &alg).await?;
+                }
+                OrderChallenge::Dns01(dns) => {
+                    let identifier = auth["identifier"]["value"]
+                        .as_str()
+                        .filter(|_| auth["identifier"]["type"] == "dns")
+                        .ok_or(
+                            "DNS-01 authorization requires a DNS identifier",
+                        )?;
+                    if !identifiers.iter().any(|ordered| {
+                        ordered["value"].as_str().is_some_and(|name| {
+                            let name = if auth["wildcard"] == true {
+                                name.strip_prefix("*.")
+                            } else {
+                                Some(name)
+                            };
+                            name.is_some_and(|name| {
+                                name.eq_ignore_ascii_case(identifier)
+                            })
+                        })
+                    }) {
+                        return Err(
+                            "DNS-01 authorization is outside the order".into(),
+                        );
                     }
-                    _ => {}
+                    let record = TxtRecord::from_authorization(
+                        identifier,
+                        &key_authorization,
+                    )?;
+                    let publication = dns
+                        .publisher
+                        .publish(record.clone())
+                        .await
+                        .map_err(AcmeError::Dns01)?;
+                    let result = async {
+                        tokio::time::timeout(dns.visibility.timeout(), async {
+                            publication
+                                .wait_visible(dns.visibility)
+                                .await
+                                .map_err(AcmeError::Dns01)?;
+                            dns.verify(&record).await
+                        })
+                        .await
+                        .map_err(|_| {
+                            AcmeError::from(format!(
+                                "DNS-01 TXT record is not visible at {}",
+                                record.owner()
+                            ))
+                        })??;
+                        self.validate_challenge(challenge_url, &alg).await
+                    }
+                    .await;
+                    let removed = publication.remove().await;
+                    if let Err(error) = removed {
+                        tracing::warn!(%error, "DNS-01 publication cleanup failed");
+                    }
+                    result?;
                 }
-
-                if started.elapsed() > Duration::from_secs(max_secs) {
-                    error!(
-                        "challenge validation timed out after {}s (url: {})",
-                        max_secs,
-                        challenge["url"].as_str().unwrap_or("")
-                    );
-                    return Err(AcmeError::from(
-                        "Challenge validation timeout",
-                    ));
-                }
-
-                sleep(backoff).await;
-                // simple exponential backoff, capped
-                backoff = std::cmp::min(backoff * 2, Duration::from_secs(10));
             }
         }
 
@@ -286,6 +320,55 @@ impl CertClient {
             }
             sleep_for(1).await;
         }
+    }
+
+    async fn validate_challenge(
+        &self,
+        url: &str,
+        alg: &Algorithm,
+    ) -> Result<(), AcmeError> {
+        debug!("Waiting for challenge to be validated");
+
+        self.send_signed_request(url, Some(&json!({})), alg).await?;
+
+        // Bound the validation wait with an overall deadline.
+        // Compile-time default; promote to `AcmeConfig` if operator
+        // tuning becomes necessary. Runtime env reads are not
+        // allowed (claviron worker scrubs libc env post-boot).
+        let max_secs: u64 = 90;
+        let started = Instant::now();
+        let mut backoff = Duration::from_secs(1);
+
+        loop {
+            let challenge_status_resp =
+                self.send_signed_request(url, None, alg).await?;
+            let challenge_status_text = challenge_status_resp.text().await?;
+            let challenge_status: serde_json::Value =
+                serde_json::from_str(&challenge_status_text)?;
+
+            match challenge_status["status"].as_str() {
+                Some("valid") => break,
+                Some("invalid") => {
+                    let err = challenge_status["error"].clone();
+                    error!("challenge became invalid: {}", err);
+                    return Err(AcmeError::InvalidOrderStatus);
+                }
+                _ => {}
+            }
+
+            if started.elapsed() > Duration::from_secs(max_secs) {
+                error!(
+                    "challenge validation timed out after {}s (url: {})",
+                    max_secs, url
+                );
+                return Err(AcmeError::from("Challenge validation timeout"));
+            }
+
+            sleep(backoff).await;
+            // simple exponential backoff, capped
+            backoff = std::cmp::min(backoff * 2, Duration::from_secs(10));
+        }
+        Ok(())
     }
 
     async fn send_signed_request(

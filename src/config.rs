@@ -41,10 +41,12 @@ pub struct AcmeConfig {
     challenges_dir: PathBuf,
     #[serde(default)]
     pub method: Option<ChallengeMethod>,
+    #[serde(default)]
+    dns: Option<Dns01Config>,
     production_url: String,
     staging_url: String,
     organization: Organization,
-    /// If true, run HTTP pre-validation before ACME flow
+    /// Check reachability using the selected challenge method.
     #[serde(default, rename = "pre-validation", alias = "prevalidation")]
     pub pre_validation: bool,
     pub renew_before: u32,
@@ -63,8 +65,19 @@ pub struct AcmeConfig {
 /// Optional native challenge presentation selected by this provider.
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChallengeMethod {
-    #[serde(rename = "http-0")]
+    #[serde(rename = "http-0", alias = "http-01")]
     Http0,
+    #[serde(rename = "dns-01")]
+    Dns01,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Dns01Config {
+    #[serde(deserialize_with = "deserialize_duration")]
+    visibility_timeout: Duration,
+    #[serde(deserialize_with = "deserialize_duration")]
+    check_interval: Duration,
 }
 
 fn default_rate_limit_window() -> Duration {
@@ -76,6 +89,31 @@ fn default_max_attempts_per_cn() -> u8 {
 }
 
 impl AcmeConfig {
+    #[cfg(all(feature = "db", feature = "server"))]
+    pub(crate) fn file_challenge(
+        &self
+    ) -> Result<crate::clients::OrderChallenge<'_>, crate::AcmeError> {
+        match self.method {
+            None | Some(ChallengeMethod::Http0) => Ok(
+                crate::clients::OrderChallenge::Http01(self.challenges_dir()),
+            ),
+            Some(ChallengeMethod::Dns01) => {
+                Err(crate::AcmeError::MissingTxtPublisher)
+            }
+        }
+    }
+
+    #[cfg(feature = "server")]
+    pub(crate) fn dns_visibility(
+        &self
+    ) -> Result<crate::dns01::Visibility, crate::AcmeError> {
+        let dns = self.dns.ok_or("method dns-01 requires the dns block")?;
+        crate::dns01::Visibility::new(
+            dns.visibility_timeout,
+            dns.check_interval,
+        )
+    }
+
     pub fn account_dir(
         &self,
         name: &str,

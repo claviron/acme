@@ -20,7 +20,10 @@ use claviron::runtime::registry::{Component, Reloadable, priority};
 use claviron::runtime::{AppState, Register};
 use tracing::info;
 
+use crate::AcmeError;
+use crate::clients::OrderChallenge;
 use crate::config::{AcmeConfig, ChallengeMethod};
+use crate::dns01::{Dns01, TxtPublisher};
 
 /// What the ACME configuration file is called in the config directory.
 pub const CONFIG_FILE: &str = "acme.yaml";
@@ -28,6 +31,7 @@ pub const CONFIG_FILE: &str = "acme.yaml";
 pub struct AcmeProvider {
     config_path: PathBuf,
     snapshot: ArcSwapOption<AcmeConfig>,
+    txt_publisher: Option<Arc<dyn TxtPublisher>>,
     #[cfg(feature = "http-0")]
     pub(crate) http01:
         std::sync::Mutex<Option<Arc<crate::http01::Http01Layer>>>,
@@ -39,6 +43,7 @@ impl AcmeProvider {
         Self {
             config_path,
             snapshot: ArcSwapOption::empty(),
+            txt_publisher: None,
             #[cfg(feature = "http-0")]
             http01: std::sync::Mutex::default(),
             worker: false,
@@ -47,6 +52,30 @@ impl AcmeProvider {
 
     pub fn snapshot(&self) -> Option<Arc<AcmeConfig>> {
         self.snapshot.load_full()
+    }
+
+    pub fn order_challenge<'a>(
+        &'a self,
+        config: &'a AcmeConfig,
+    ) -> Result<OrderChallenge<'a>, AcmeError> {
+        match config.method {
+            None | Some(ChallengeMethod::Http0) => {
+                Ok(OrderChallenge::Http01(config.challenges_dir()))
+            }
+            Some(ChallengeMethod::Dns01) => {
+                let publisher = self
+                    .txt_publisher
+                    .as_deref()
+                    .ok_or(AcmeError::MissingTxtPublisher)?;
+                let dns = Dns01::new(publisher, config.dns_visibility()?);
+                let dns = if config.pre_validation {
+                    dns.with_system_resolver()?
+                } else {
+                    dns
+                };
+                Ok(OrderChallenge::Dns01(dns))
+            }
+        }
     }
 
     fn apply(
@@ -94,6 +123,9 @@ impl Register<AppState> for AcmeProvider {
         state.bind_config_environment::<Self>()?;
         let provider = Arc::new(AcmeProvider {
             worker: state.is_worker(),
+            txt_publisher: state
+                .registry_ref()
+                .resolve_dyn::<dyn TxtPublisher>(),
             ..AcmeProvider::empty(state.config_dir().join(CONFIG_FILE))
         });
         #[cfg(feature = "http-0")]
@@ -166,6 +198,10 @@ impl Configurable for AcmeProvider {
         &self,
         config: &Self::Config,
     ) -> congif::Result<()> {
+        if let Some(config) = config {
+            self.order_challenge(config)
+                .map_err(|error| congif::Error::msg(error.to_string()))?;
+        }
         if config
             .as_ref()
             .is_some_and(|config| config.method == Some(ChallengeMethod::Http0))
