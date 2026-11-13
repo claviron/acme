@@ -4,11 +4,9 @@ pub mod actions;
 pub mod clients;
 pub mod config;
 pub mod cryptex;
-pub mod dns01;
 mod error;
-#[cfg(feature = "http-0")]
-pub mod http01;
 mod meta;
+pub mod methods;
 #[cfg(feature = "server")]
 pub mod provider;
 #[cfg(feature = "db")]

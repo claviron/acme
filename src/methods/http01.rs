@@ -22,7 +22,7 @@ use claviron::pipeline::{DispatchCall, HostHandlerResult, HostRequest};
 use claviron::runtime::{AppState, registry};
 use http::{Method, Request, Response, StatusCode, header};
 
-use crate::{AcmeConfig, AcmeError, AcmeProvider, ChallengeMethod};
+use crate::{AcmeConfig, AcmeError, AcmeProvider};
 
 // RFC 8555 fixes this path prefix; it is not an operator routing default.
 const PREFIX: &str = "/.well-known/acme-challenge/";
@@ -261,7 +261,7 @@ fn prepare_non_serving_config(
     let Some(config) = config else {
         return Ok(None);
     };
-    if config.method != Some(ChallengeMethod::Http0) {
+    if !config.serves_http01() {
         return Ok(None);
     }
     let layer = Http01Layer::from(storage(state, config)?);
@@ -281,8 +281,7 @@ impl Routable for AcmeProvider {
         _key: &Host,
         _host: &HostConfig,
     ) -> bool {
-        self.snapshot()
-            .is_some_and(|config| config.method == Some(ChallengeMethod::Http0))
+        self.snapshot().is_some_and(|config| config.serves_http01())
     }
 
     fn layers(
@@ -293,9 +292,8 @@ impl Routable for AcmeProvider {
     ) -> registry::Result<Vec<Arc<dyn RouteLayer>>> {
         let mut prepared =
             self.http01.lock().expect("HTTP-01 preparation poisoned");
-        let Some(config) = self
-            .snapshot()
-            .filter(|config| config.method == Some(ChallengeMethod::Http0))
+        let Some(config) =
+            self.snapshot().filter(|config| config.serves_http01())
         else {
             return Ok(Vec::new());
         };
@@ -308,5 +306,5 @@ impl Routable for AcmeProvider {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/http01.rs"]
+#[path = "../../tests/unit/http01.rs"]
 mod tests;

@@ -1,6 +1,6 @@
 [package]
 name = "claviron-acme"
-version = "0.2.1"
+version = "0.2.2"
 publish = true
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/claviron/acme"
@@ -15,6 +15,8 @@ include = ["src/**", "Cargo.toml", "README.md", "LICENSE-*"]
 [features]
 default = []
 http-0 = ["server", "claviron/edge", "dep:bytes"]
+dns-01 = []
+tls-alpn-01 = ["server", "dep:claviron-tls", "dep:rcgen", "dep:rustls"]
 resolver = ["claviron/resolver-hickory"]
 db = ["dep:sqlx", "claviron/hosting"]
 postgres = ["db", "claviron/postgres"]
@@ -31,6 +33,7 @@ server = [
 [dependencies]
 
 claviron = { version = "0.2.1", default-features = false, features = ["ssl"] }
+claviron-tls = { version = "0.2.4", default-features = false, optional = true }
 
 sqlx = { version = "0.9", optional = true, features = ["runtime-tokio", "postgres", "uuid", "time"] }
 tokio-util = { version = "0.7", optional = true, features = ["rt"] }
@@ -40,6 +43,8 @@ futures = { version = "0.3", optional = true }
 tokio = { version = "1", features = ["fs", "rt", "sync", "time"] }
 base64ct = { version = "1.8", features = ["alloc"] }
 reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "gzip", "brotli", "deflate", "multipart", "form", "rustls"] }
+rcgen = { version = "0.14", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["std"], optional = true }
 pkcs8 = { version = "0.11", features = ["pem"] }
 p256 = { version = "0.14", features = ["pkcs8", "pem"] }
 aws-lc-rs = { version = "1.17", features = ["ring-io"] }

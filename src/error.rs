@@ -70,6 +70,10 @@ pub enum AcmeError {
     #[error("DNS-01 TXT publication failed: {0}")]
     Dns01(#[source] Box<dyn std::error::Error + Send + Sync>),
 
+    #[cfg(feature = "tls-alpn-01")]
+    #[error("TLS-ALPN-01 publication failed: {0}")]
+    TlsAlpn01(#[source] crate::methods::tlsalpn01::PublishError),
+
     #[error("Request signing error: {0}")]
     SignRequest(String),
 

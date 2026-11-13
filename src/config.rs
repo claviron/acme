@@ -39,10 +39,13 @@ pub struct AcmeConfig {
     default_account: String,
     #[serde(default)]
     challenges_dir: PathBuf,
+    #[serde(default, rename = "http-0", alias = "http-01")]
+    http01: Option<Http01Config>,
+    /// Default for orders which do not specify a method.
     #[serde(default)]
     pub method: Option<ChallengeMethod>,
-    #[serde(default)]
-    dns: Option<Dns01Config>,
+    #[serde(default, rename = "dns-01")]
+    dns01: Option<Dns01Config>,
     production_url: String,
     staging_url: String,
     organization: Organization,
@@ -62,13 +65,21 @@ pub struct AcmeConfig {
     pub max_attempts_per_cn: u8,
 }
 
-/// Optional native challenge presentation selected by this provider.
+/// Challenge method selected for a certificate order.
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChallengeMethod {
     #[serde(rename = "http-0", alias = "http-01")]
     Http0,
     #[serde(rename = "dns-01")]
     Dns01,
+    #[serde(rename = "tls-alpn-01")]
+    TlsAlpn01,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Http01Config {
+    challenges_dir: PathBuf,
 }
 
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,15 +111,18 @@ impl AcmeConfig {
             Some(ChallengeMethod::Dns01) => {
                 Err(crate::AcmeError::MissingTxtPublisher)
             }
+            Some(ChallengeMethod::TlsAlpn01) => {
+                Err("TLS-ALPN-01 requires a challenge publisher".into())
+            }
         }
     }
 
-    #[cfg(feature = "server")]
+    #[cfg(all(feature = "server", feature = "dns-01"))]
     pub(crate) fn dns_visibility(
         &self
-    ) -> Result<crate::dns01::Visibility, crate::AcmeError> {
-        let dns = self.dns.ok_or("method dns-01 requires the dns block")?;
-        crate::dns01::Visibility::new(
+    ) -> Result<crate::methods::dns01::Visibility, crate::AcmeError> {
+        let dns = self.dns01.ok_or("DNS-01 requires the dns-01 block")?;
+        crate::methods::dns01::Visibility::new(
             dns.visibility_timeout,
             dns.check_interval,
         )
@@ -177,7 +191,14 @@ impl AcmeConfig {
     }
 
     pub fn challenges_dir(&self) -> &PathBuf {
-        &self.challenges_dir
+        self.http01
+            .as_ref()
+            .map_or(&self.challenges_dir, |config| &config.challenges_dir)
+    }
+
+    #[cfg(feature = "http-0")]
+    pub(crate) fn serves_http01(&self) -> bool {
+        self.http01.is_some() || self.method == Some(ChallengeMethod::Http0)
     }
 
     pub fn organization(&self) -> &Organization {

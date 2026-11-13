@@ -1,14 +1,15 @@
 use super::*;
 
+#[cfg(feature = "dns-01")]
 #[tokio::test]
 async fn dns01_waits_for_visibility_before_asking_the_ca() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use crate::cryptex::keys::generate_acme_key_with_jwk;
-    use crate::dns01::{
+    use crate::issuer::{self, Reply, order_replies};
+    use crate::methods::dns01::{
         PublishError, TxtPublication, TxtPublisher, Visibility,
     };
-    use crate::issuer::{self, Reply, order_replies};
     use claviron::ssl::{Organization, generators};
     use tokio::sync::{Notify, Semaphore};
 

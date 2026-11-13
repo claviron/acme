@@ -14,19 +14,26 @@ use crate::clients::challenge::{Challenge as ChallengeFile, valid_token};
 use crate::clients::http::checked_response;
 use crate::cryptex::jwk::AcmeJwk;
 use crate::cryptex::signing::{sign_payload, thumbprint};
-use crate::dns01::{Dns01, TxtRecord};
+#[cfg(feature = "dns-01")]
+use crate::methods::dns01::{Dns01, TxtRecord};
 
 /// How to present the proof for a certificate order.
 pub enum OrderChallenge<'a> {
     Http01(&'a Path),
+    #[cfg(feature = "dns-01")]
     Dns01(Dns01<'a>),
+    #[cfg(feature = "tls-alpn-01")]
+    TlsAlpn01(&'a dyn crate::methods::tlsalpn01::Publisher),
 }
 
 impl OrderChallenge<'_> {
     fn kind(&self) -> &'static str {
         match self {
             Self::Http01(_) => "http-01",
+            #[cfg(feature = "dns-01")]
             Self::Dns01(..) => "dns-01",
+            #[cfg(feature = "tls-alpn-01")]
+            Self::TlsAlpn01(_) => "tls-alpn-01",
         }
     }
 }
@@ -131,6 +138,19 @@ impl CertClient {
             .map(|d| json!({"type": "dns", "value": d.key_str()}))
             .collect();
 
+        #[cfg(feature = "tls-alpn-01")]
+        if matches!(method, OrderChallenge::TlsAlpn01(_))
+            && identifiers.iter().any(|identifier| {
+                identifier["value"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("*."))
+            })
+        {
+            return Err(
+                "TLS-ALPN-01 does not support wildcard identifiers".into()
+            );
+        }
+
         debug!("Creating new order with identifiers: {:?}", identifiers);
 
         let order_resp = self
@@ -198,6 +218,7 @@ impl CertClient {
                     .await?;
                     self.validate_challenge(challenge_url, &alg).await?;
                 }
+                #[cfg(feature = "dns-01")]
                 OrderChallenge::Dns01(dns) => {
                     let identifier = auth["identifier"]["value"]
                         .as_str()
@@ -253,6 +274,33 @@ impl CertClient {
                         tracing::warn!(%error, "DNS-01 publication cleanup failed");
                     }
                     result?;
+                }
+                #[cfg(feature = "tls-alpn-01")]
+                OrderChallenge::TlsAlpn01(publisher) => {
+                    let identifier = auth["identifier"]["value"]
+                        .as_str()
+                        .filter(|_| auth["identifier"]["type"] == "dns" && auth["wildcard"] != true)
+                        .ok_or("TLS-ALPN-01 requires a non-wildcard DNS identifier")?;
+                    if !identifiers.iter().any(|ordered| {
+                        ordered["value"].as_str().is_some_and(|name| {
+                            name.eq_ignore_ascii_case(identifier)
+                        })
+                    }) {
+                        return Err(
+                            "TLS-ALPN-01 authorization is outside the order"
+                                .into(),
+                        );
+                    }
+                    let name = identifier.parse()?;
+                    let config = crate::methods::tlsalpn01::challenge_config(
+                        &name,
+                        &key_authorization,
+                    )?;
+                    let _publication = publisher
+                        .publish(&name, config)
+                        .await
+                        .map_err(AcmeError::TlsAlpn01)?;
+                    self.validate_challenge(challenge_url, &alg).await?;
                 }
             }
         }

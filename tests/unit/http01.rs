@@ -300,7 +300,7 @@ async fn non_serving_http01_answers_before_policy_for_every_admitted_host() {
 }
 
 #[test]
-fn only_http01_method_prepares_non_serving_storage() {
+fn http01_block_serves_challenges_with_a_different_default() {
     let state = AppState::standalone("http01-method", ".");
     let mut config: AcmeConfig = serde_yaml::from_str(
         r#"
@@ -323,7 +323,7 @@ method: http-0
     // An active method needs storage. Inactive selection must not try to
     // acquire it; this fixture intentionally declares no directory or store.
     assert!(prepare_non_serving_config(&state, Some(&config)).is_err());
-    config.method = Some(ChallengeMethod::Dns01);
+    config.method = Some(crate::ChallengeMethod::Dns01);
     assert!(
         prepare_non_serving_config(&state, Some(&config)).unwrap().is_none()
     );
@@ -331,5 +331,50 @@ method: http-0
     assert!(
         prepare_non_serving_config(&state, Some(&config)).unwrap().is_none()
     );
+    let mut yaml = serde_yaml::from_str::<serde_yaml::Value>(
+        r#"
+base_dir: storage/acme
+production_url: https://ca.example.test
+staging_url: https://staging.example.test
+organization: { name: Example, email: operator@example.test }
+algorithm: ES256
+renew_before: 30
+method: dns-01
+http-0:
+  challenges_dir: storage/acme/shared
+dns-01:
+  visibility_timeout: 60s
+  check_interval: 1s
+"#,
+    )
+    .unwrap();
+    let both: AcmeConfig = serde_yaml::from_value(yaml.clone()).unwrap();
+    #[cfg(feature = "dns-01")]
+    {
+        let visibility = both.dns_visibility().unwrap();
+        assert_eq!(visibility.timeout().as_secs(), 60);
+        assert_eq!(visibility.interval().as_secs(), 1);
+    }
+    assert_eq!(
+        both.challenges_dir(),
+        std::path::Path::new("storage/acme/shared")
+    );
+    assert!(prepare_non_serving_config(&state, Some(&both)).unwrap().is_some());
+    yaml["method"] = serde_yaml::Value::String("http-0".into());
+    let http: AcmeConfig = serde_yaml::from_value(yaml).unwrap();
+    let provider = AcmeProvider::empty("acme.yaml".into());
+    assert!(matches!(
+        provider.order_challenge(&http, None),
+        Ok(crate::clients::OrderChallenge::Http01(_))
+    ));
+    assert!(
+        provider
+            .order_challenge(&http, Some(crate::ChallengeMethod::Dns01))
+            .is_err()
+    );
+    assert!(matches!(
+        provider.order_challenge(&both, Some(crate::ChallengeMethod::Http0)),
+        Ok(crate::clients::OrderChallenge::Http01(_))
+    ));
     assert!(prepare_non_serving_config(&state, None).unwrap().is_none());
 }

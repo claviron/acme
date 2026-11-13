@@ -27,6 +27,9 @@ Default features are empty.
 | Feature | Adds |
 | --- | --- |
 | `http-0` | Optional native HTTP-01 handler for plain serving and non-serving hosts. |
+| `dns-01` | DNS-01 issuance through an application-provided TXT publisher. |
+| `tls-alpn-01` | TLS-ALPN-01 issuance through a TCP TLS challenge publisher. |
+| `resolver` | System DNS lookups for DNS-01 pre-validation. |
 | `server` | `AcmeProvider`, `register`, and prepared `acme.yaml` configuration. |
 | `db` | SQLx-backed `AcmeStore` and hosting integration. Database action helpers also require `server`. |
 | `postgres` | `db` with Claviron's PostgreSQL backend. |
@@ -64,7 +67,6 @@ prepared snapshot after reload; an in-flight order retains its original one.
 ```yaml
 base_dir: storage/acme
 default_account: default
-challenges_dir: storage/acme/challenges
 production_url: https://acme-v02.api.letsencrypt.org
 staging_url: https://acme-staging-v02.api.letsencrypt.org
 organization:
@@ -91,10 +93,15 @@ registers the serving Routable contribution and non-serving interceptor factory.
 
 ```yaml
 method: http-0
+http-0:
+  challenges_dir: storage/acme/challenges
 ```
 
-`method: http-0` enables the handler for all admitted plain HTTP hosts.
-An absent method installs no contribution. Plain `non_ssl: serve` plans
+`method` selects the default for issuance and renewal. Rust callers can pass
+`Some(ChallengeMethod::…)` to `AcmeProvider::order_challenge` for one operation.
+Pass `None` to use the default. The `http-0:` block enables the HTTP handler
+for admitted plain HTTP hosts independently of the default. Existing flat
+`challenges_dir` with `method: http-0` continues to work. Plain `non_ssl: serve` plans
 use the prepared Routable layer after host access/quota/body policies. Plain
 `non_ssl: redirect/reject` uses `InterceptsNonServing` before the policy reply,
 with the same token selection and storage implementation. Normal host layers do
@@ -105,12 +112,12 @@ publication; an absent method installs no hook.
 HTTPS/QUIC do not prepare it. Host/listener admission and explicit listener
 filters still apply. Public port-80 reachability remains the application's
 responsibility. The factory occupies Edge's single non-serving
-binding while registered. `http01::prepare_non_serving` is public and returns
+binding while registered. `methods::http01::prepare_non_serving` is public and returns
 an `InterceptsNonServing` handler for explicit composition; Unhandled preserves
 the request for the next handler. The automatic binding's composition limit is
 marked TODO at registration.
 
-`http01::Http01Storage` supplies raw bytes for live tokens. Bind a concrete
+`methods::http01::Http01Storage` supplies raw bytes for live tokens. Bind a concrete
 implementation through the runtime registry before host preparation to use a
 cache, database or another backend. That implementation owns expiry and
 cross-worker visibility. The reader performs no fallback lookup after a storage
@@ -161,11 +168,10 @@ The [gRPC extension](https://github.com/claviron/grpc) can expose these operatio
 
 ### DNS-01
 
-With `server`, bind a `dns01::TxtPublisher` in the runtime registry before
-registering the ACME provider. Select `method: dns-01` in `acme.yaml`
-and declare `visibility_timeout` and `check_interval` in its `dns:` block. The same method
-applies to new orders and renewal. HTTP-01 is the default for orders, and
-`method: http-0` also enables the HTTP challenge route. With DNS-01,
+With `server` and `dns-01`, bind a `methods::dns01::TxtPublisher` before
+registering the ACME provider. Declare `visibility_timeout` and
+`check_interval` in the `dns-01:` block. Choose `method: dns-01` to make it the
+default for new orders and renewal. With DNS-01,
 `pre-validation: true` requires the `resolver` feature and verifies the TXT
 value through the system-configured resolver before starting CA validation.
 
@@ -176,10 +182,20 @@ that publication to confirm authoritative DNS visibility before asking the CA
 to validate. DNS server configuration and propagation checks belong to the
 publisher.
 
+### TLS-ALPN-01
+
+Enable `tls-alpn-01` and set `method: tls-alpn-01` in `acme.yaml`.
+For a standalone Edge, call `methods::tlsalpn01::register_local(state, listener)`
+before registering ACME. The named TCP TLS listener must accept the CA's
+connection on port 443. A supervised application supplies a publisher and
+handshake selector that make each proof visible across its accepting workers
+before returning the publication guard.
+
 ## Boundaries
 
-HTTP-01 and DNS-01 are implemented. TLS-ALPN-01, external account binding,
-and account-key rollover are outside the current API.
+HTTP-01, DNS-01 and TLS-ALPN-01 are implemented. DNS-01 is required for
+wildcard orders. External account binding and account-key rollover are
+outside the current API.
 ES384 and EdDSA account generation/signing are not implemented.
 
 The file issuance helper does not persist staging certificates, and file renewal

@@ -92,7 +92,7 @@ pub async fn acme_renew(
             let _permit = sem.acquire().await.unwrap(); // limit
             let cn = cert.certificate.cn.clone();
             let result = async {
-                let challenge = acme.order_challenge(&cfg)?;
+                let challenge = acme.order_challenge(&cfg, None)?;
                 renew_cert_from_db_with_challenge(
                     &acme_store,
                     &hosting,

@@ -23,7 +23,10 @@ use tracing::info;
 use crate::AcmeError;
 use crate::clients::OrderChallenge;
 use crate::config::{AcmeConfig, ChallengeMethod};
-use crate::dns01::{Dns01, TxtPublisher};
+#[cfg(feature = "dns-01")]
+use crate::methods::dns01::{Dns01, TxtPublisher};
+#[cfg(feature = "tls-alpn-01")]
+use crate::methods::tlsalpn01;
 
 /// What the ACME configuration file is called in the config directory.
 pub const CONFIG_FILE: &str = "acme.yaml";
@@ -31,10 +34,13 @@ pub const CONFIG_FILE: &str = "acme.yaml";
 pub struct AcmeProvider {
     config_path: PathBuf,
     snapshot: ArcSwapOption<AcmeConfig>,
+    #[cfg(feature = "dns-01")]
     txt_publisher: Option<Arc<dyn TxtPublisher>>,
+    #[cfg(feature = "tls-alpn-01")]
+    tls_alpn_publisher: Option<Arc<dyn tlsalpn01::Publisher>>,
     #[cfg(feature = "http-0")]
     pub(crate) http01:
-        std::sync::Mutex<Option<Arc<crate::http01::Http01Layer>>>,
+        std::sync::Mutex<Option<Arc<crate::methods::http01::Http01Layer>>>,
     worker: bool,
 }
 
@@ -43,7 +49,10 @@ impl AcmeProvider {
         Self {
             config_path,
             snapshot: ArcSwapOption::empty(),
+            #[cfg(feature = "dns-01")]
             txt_publisher: None,
+            #[cfg(feature = "tls-alpn-01")]
+            tls_alpn_publisher: None,
             #[cfg(feature = "http-0")]
             http01: std::sync::Mutex::default(),
             worker: false,
@@ -54,26 +63,47 @@ impl AcmeProvider {
         self.snapshot.load_full()
     }
 
+    /// Resolve an explicit order method or use the configured default.
     pub fn order_challenge<'a>(
         &'a self,
         config: &'a AcmeConfig,
+        method: Option<ChallengeMethod>,
     ) -> Result<OrderChallenge<'a>, AcmeError> {
-        match config.method {
+        match method.or(config.method) {
+            Some(ChallengeMethod::Http0) if !cfg!(feature = "http-0") => {
+                Err("ACME HTTP-01 requires the http-0 feature".into())
+            }
             None | Some(ChallengeMethod::Http0) => {
                 Ok(OrderChallenge::Http01(config.challenges_dir()))
             }
             Some(ChallengeMethod::Dns01) => {
-                let publisher = self
-                    .txt_publisher
-                    .as_deref()
-                    .ok_or(AcmeError::MissingTxtPublisher)?;
-                let dns = Dns01::new(publisher, config.dns_visibility()?);
-                let dns = if config.pre_validation {
-                    dns.with_system_resolver()?
-                } else {
-                    dns
-                };
-                Ok(OrderChallenge::Dns01(dns))
+                #[cfg(feature = "dns-01")]
+                {
+                    let publisher = self
+                        .txt_publisher
+                        .as_deref()
+                        .ok_or(AcmeError::MissingTxtPublisher)?;
+                    let dns = Dns01::new(publisher, config.dns_visibility()?);
+                    let dns = if config.pre_validation {
+                        dns.with_system_resolver()?
+                    } else {
+                        dns
+                    };
+                    Ok(OrderChallenge::Dns01(dns))
+                }
+                #[cfg(not(feature = "dns-01"))]
+                Err("ACME DNS-01 requires the dns-01 feature".into())
+            }
+            Some(ChallengeMethod::TlsAlpn01) => {
+                #[cfg(feature = "tls-alpn-01")]
+                {
+                    self.tls_alpn_publisher.as_deref()
+                        .map(OrderChallenge::TlsAlpn01)
+                        .ok_or_else(|| "TLS-ALPN-01 requires a registered challenge publisher".into())
+                }
+                #[cfg(not(feature = "tls-alpn-01"))]
+                Err("acme.method tls-alpn-01 requires the tls-alpn-01 feature"
+                    .into())
             }
         }
     }
@@ -123,9 +153,14 @@ impl Register<AppState> for AcmeProvider {
         state.bind_config_environment::<Self>()?;
         let provider = Arc::new(AcmeProvider {
             worker: state.is_worker(),
+            #[cfg(feature = "dns-01")]
             txt_publisher: state
                 .registry_ref()
                 .resolve_dyn::<dyn TxtPublisher>(),
+            #[cfg(feature = "tls-alpn-01")]
+            tls_alpn_publisher: state
+                .registry_ref()
+                .resolve_dyn::<dyn tlsalpn01::Publisher>(),
             ..AcmeProvider::empty(state.config_dir().join(CONFIG_FILE))
         });
         #[cfg(feature = "http-0")]
@@ -140,7 +175,7 @@ impl Register<AppState> for AcmeProvider {
                 })?;
             // TODO: compose non-serving integrations when Edge supports multiple interceptors.
             hosts.bind_non_serving_interception_with(
-                crate::http01::prepare_non_serving,
+                crate::methods::http01::prepare_non_serving,
             )?;
             claviron::edge::register_routable(state, provider)?;
         }
@@ -199,17 +234,8 @@ impl Configurable for AcmeProvider {
         config: &Self::Config,
     ) -> congif::Result<()> {
         if let Some(config) = config {
-            self.order_challenge(config)
+            self.order_challenge(config, None)
                 .map_err(|error| congif::Error::msg(error.to_string()))?;
-        }
-        if config
-            .as_ref()
-            .is_some_and(|config| config.method == Some(ChallengeMethod::Http0))
-            && !cfg!(feature = "http-0")
-        {
-            return Err(congif::Error::msg(
-                "acme.method http-0 requires the http-0 feature",
-            ));
         }
         Ok(())
     }
