@@ -2,7 +2,7 @@
 
 ACME certificate issuance and renewal for
 [Claviron](https://crates.io/crates/claviron). The crate registers accounts,
-completes HTTP-01 challenges, and produces certificate material for file-based
+validates domain control, and produces certificate material for file-based
 or database-backed deployments.
 
 ## Capabilities
@@ -86,8 +86,6 @@ max_attempts_per_cn: 3
 Paths are relative to the application working directory. `renew_before` is in
 days. These values are an example deployment policy, not a claim about CA quotas.
 
-The `http-0` integration below is unreleased.
-
 With this crate's `http-0` feature, `claviron_acme::register(state)` automatically
 registers the serving Routable contribution and non-serving interceptor factory.
 
@@ -108,7 +106,7 @@ with the same token selection and storage implementation. Normal host layers do
 not run on that path. Other paths fall through with their unread body.
 
 The non-serving factory reads the staged ACME configuration at each listener
-publication; an absent method installs no hook.
+publication and installs a hook when HTTP-01 serving is configured.
 HTTPS/QUIC do not prepare it. Host/listener admission and explicit listener
 filters still apply. Public port-80 reachability remains the application's
 responsibility. The factory occupies Edge's single non-serving
@@ -185,11 +183,13 @@ publisher.
 ### TLS-ALPN-01
 
 Enable `tls-alpn-01` and set `method: tls-alpn-01` in `acme.yaml`.
-For a standalone Edge, call `methods::tlsalpn01::register_local(state, listener)`
-before registering ACME. The named TCP TLS listener must accept the CA's
-connection on port 443. A supervised application supplies a publisher and
-handshake selector that make each proof visible across its accepting workers
-before returning the publication guard.
+Applications can bind their own TLS-ALPN-01 `Publisher`. The built-in
+`methods::tlsalpn01::register_local(state, listener)` adapter requires an Edge
+that consumes `HandshakeSelector`. That Edge integration is unreleased.
+The named TCP TLS listener must accept the CA's connection on port 443.
+A supervised application supplies a publisher and handshake selector that
+make each proof visible across its accepting workers before returning the
+publication guard.
 
 ## Boundaries
 
