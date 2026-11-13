@@ -187,7 +187,7 @@ impl CertClient {
                 serde_json::from_str(&auth_resp_text)?;
 
             if auth["status"] == "valid" {
-                debug!("Authorization is already valid, skipping challenge.");
+                tracing::info!("ACME authorization already valid; challenge skipped");
                 continue;
             }
 
@@ -251,6 +251,7 @@ impl CertClient {
                         .publish(record.clone())
                         .await
                         .map_err(AcmeError::Dns01)?;
+                    tracing::info!(owner = record.owner(), "DNS-01 TXT record published");
                     let result = async {
                         tokio::time::timeout(dns.visibility.timeout(), async {
                             publication
@@ -266,7 +267,10 @@ impl CertClient {
                                 record.owner()
                             ))
                         })??;
-                        self.validate_challenge(challenge_url, &alg).await
+                        tracing::info!(owner = record.owner(), "DNS-01 TXT record is visible");
+                        self.validate_challenge(challenge_url, &alg).await?;
+                        tracing::info!(owner = record.owner(), "DNS-01 challenge validated");
+                        Ok::<(), AcmeError>(())
                     }
                     .await;
                     let removed = publication.remove().await;
