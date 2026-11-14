@@ -10,7 +10,7 @@ use tracing::{debug, error, warn};
 
 use crate::AcmeError;
 use crate::account::{Account, CERT_META_PATH, CERT_TEXT_PATH, CSR_FILE_NAME};
-use crate::clients::{CertClient, acme_client};
+use crate::clients::{AcmeClient, CertClient};
 use crate::meta::CertMeta;
 use crate::validate::validate_acme_url;
 
@@ -30,8 +30,10 @@ pub async fn new_cert(
 
     debug!("Create: new ACME certificate for {:?}", domains);
 
+    // One command, one request at a time: ACME's default HTTP.
+    let http_client = AcmeClient::new(None, &crate::config::default_http())?;
     if pre_validation {
-        validate_acme_url(&challenges_dir, domains).await?;
+        validate_acme_url(&http_client, &challenges_dir, domains).await?;
         debug!("Pre-validation completed successfully");
     }
 
@@ -50,8 +52,6 @@ pub async fn new_cert(
 
     let account_key = account.private_key();
 
-    // Create the staging client
-    let http_client = acme_client()?;
     let client =
         CertClient::with_client(http_client, account_key, &account.url)
             .map_err(|e| AcmeError::ClientCreationFailed(e.to_string()))?;

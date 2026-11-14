@@ -14,7 +14,6 @@ pub async fn acme_renew(
     use crate::AcmeProvider;
     use crate::AcmeStore;
     use crate::actions::database::renew_cert_from_db_with_challenge;
-    const CONCURRENT_TASK_COUNT: usize = 2;
 
     let Some(acme_cfg) = acme_config(&state)? else {
         debug!("acme_renew: acme.yaml missing; skipping");
@@ -77,7 +76,11 @@ pub async fn acme_renew(
     use futures::stream::{FuturesUnordered, StreamExt};
     use tokio::sync::Semaphore;
 
-    let sem = Arc::new(Semaphore::new(CONCURRENT_TASK_COUNT));
+    let client = acme.client().ok_or_else(|| {
+        claviron::tasks::Error::other("acme_renew: no ACME HTTP client")
+    })?;
+    // Orders in flight follow the request budget `http.pool` declares.
+    let sem = Arc::new(Semaphore::new(acme_cfg.http.pool.max_concurrency));
     let mut tasks = FuturesUnordered::new();
 
     for cert in certs {
@@ -86,6 +89,7 @@ pub async fn acme_renew(
         let acme_store = acme_store.clone();
         let cfg = acme_cfg.clone();
         let acme = acme.clone();
+        let client = client.clone();
 
         tasks.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap(); // limit
@@ -99,6 +103,7 @@ pub async fn acme_renew(
                     cert,
                     true,
                     challenge,
+                    &client,
                 )
                 .await
             }

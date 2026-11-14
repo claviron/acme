@@ -104,7 +104,7 @@ async fn acme_response_issuance_logs_cover_validation_and_persistence() {
                     existing,
                     false,
                     cfg.file_challenge().unwrap(),
-                    || Ok(http),
+                    &http,
                 )
                 .await
                 .map(|_| ())
@@ -117,7 +117,7 @@ async fn acme_response_issuance_logs_cover_validation_and_persistence() {
                     std::slice::from_ref(&cn),
                     &cfg,
                     cfg.file_challenge().unwrap(),
-                    || Ok(http),
+                    &http,
                 )
                 .await
                 .map(|_| ())

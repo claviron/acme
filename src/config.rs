@@ -48,6 +48,11 @@ pub struct AcmeConfig {
     dns01: Option<Dns01Config>,
     #[serde(default, rename = "tls-alpn-01")]
     tls_alpn01: TlsAlpn01Config,
+    /// Outbound HTTP to the CA: timeouts and how requests are admitted.
+    /// Unwritten, [`default_http`]: one client, one request at a time, in
+    /// each process. A fleet-wide budget or more concurrency is declared here.
+    #[serde(default = "default_http")]
+    pub http: claviron::clients::HttpClientConfig,
     production_url: String,
     staging_url: String,
     organization: Organization,
@@ -83,6 +88,29 @@ pub enum ChallengeMethod {
 #[serde(deny_unknown_fields)]
 struct Http01Config {
     challenges_dir: PathBuf,
+}
+
+/// ACME's HTTP when `acme.yaml` declares none: connect within 10s, answer
+/// within 90s, one client and one request at a time per process, up to 16
+/// requests waiting.
+pub fn default_http() -> claviron::clients::HttpClientConfig {
+    use claviron::clients::{HttpClientConfig, PoolConfig, PoolScope};
+    HttpClientConfig {
+        connect_timeout: Duration::from_secs(10),
+        request_timeout: Duration::from_secs(90),
+        rate_limit_pause: None,
+        pool: PoolConfig {
+            scope: PoolScope::Process,
+            min_idle: 0,
+            max_idle: 1,
+            max_live: 1,
+            max_concurrency: 1,
+            max_waiting: 16,
+            acquire_timeout: None,
+            idle_timeout: None,
+            max_lifetime: None,
+        },
+    }
 }
 
 /// The `tls-alpn-01:` block. Unwritten, every field is its default.

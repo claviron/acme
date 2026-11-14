@@ -45,9 +45,9 @@ impl AccountClient {
 
         let directory_response = self
             .client
-            .get(&base_url)
-            .header(ACCEPT, "application/json")
-            .send()
+            .send(|client| {
+                client.get(&base_url).header(ACCEPT, "application/json")
+            })
             .await?;
 
         let directory_response = checked_response(directory_response).await?;
@@ -95,7 +95,8 @@ impl AccountClient {
         key_pem: &str,
         jwk: &jwk::AcmeJwk,
     ) -> Result<reqwest::Response, AcmeError> {
-        let nonce_resp = self.client.head(new_nonce_url).send().await?;
+        let nonce_resp =
+            self.client.send(|client| client.head(new_nonce_url)).await?;
         let nonce_resp = checked_response(nonce_resp).await?;
         let nonce_hdr = nonce_resp
             .headers()
@@ -142,11 +143,13 @@ impl AccountClient {
         let body_str = serde_json::to_string(&body)?;
         let response = self
             .client
-            .post(url)
-            .header("Content-Type", "application/jose+json")
-            .header(ACCEPT, "application/json")
-            .body(body_str)
-            .send()
+            .send(|client| {
+                client
+                    .post(url)
+                    .header("Content-Type", "application/jose+json")
+                    .header(ACCEPT, "application/json")
+                    .body(body_str)
+            })
             .await?;
 
         checked_response(response).await

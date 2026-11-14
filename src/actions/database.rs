@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
-use crate::clients::{AcmeClient, CertClient, OrderChallenge, acme_client};
+use crate::clients::{AcmeClient, CertClient, OrderChallenge};
 use crate::cryptex::jwk::AcmeJwk;
 use crate::validate::validate_acme_url;
 use crate::{AcmeConfig, AcmeError, AcmeOperation, AcmeStore};
@@ -43,6 +43,7 @@ pub async fn add_cert_to_db(
         aliases,
         cfg,
         cfg.file_challenge()?,
+        &AcmeClient::new(None, &cfg.http)?,
     )
     .await
 }
@@ -55,16 +56,10 @@ pub async fn add_cert_to_db_with_challenge(
     aliases: &[Sni],
     cfg: &AcmeConfig,
     challenge: OrderChallenge<'_>,
+    client: &AcmeClient,
 ) -> Result<AddCertificateResult, AcmeError> {
     add_with_client(
-        acme_store,
-        hosting,
-        server_id,
-        cn,
-        aliases,
-        cfg,
-        challenge,
-        acme_client,
+        acme_store, hosting, server_id, cn, aliases, cfg, challenge, client,
     )
     .await
 }
@@ -77,7 +72,7 @@ async fn add_with_client(
     aliases: &[Sni],
     cfg: &AcmeConfig,
     challenge: OrderChallenge<'_>,
-    make_client: impl FnOnce() -> Result<AcmeClient, AcmeError>,
+    http: &AcmeClient,
 ) -> Result<AddCertificateResult, AcmeError> {
     let start_time = Instant::now();
     if let Some(existing) = hosting
@@ -130,7 +125,7 @@ async fn add_with_client(
     let mut account_id = None;
     let attempt = async {
         if cfg.pre_validation && let OrderChallenge::Http01(directory) = &challenge {
-            validate_acme_url(directory, aliases).await?;
+            validate_acme_url(http, directory, aliases).await?;
             debug!("Pre-validation completed successfully");
         }
 
@@ -145,7 +140,7 @@ async fn add_with_client(
         let organization = Organization::from_name(&account.organization);
         let csr =
             generate_server_csr(&private_key, &cn.as_str().parse()?, Aliases::from(aliases), &organization)?;
-        let client = CertClient::with_client(make_client()?, &account.private_key, &account.url)
+        let client = CertClient::with_client(http.clone(), &account.private_key, &account.url)
             .map_err(|error| AcmeError::ClientCreationFailed(error.to_string()))?;
         let jwk: AcmeJwk = serde_json::from_value(account.jwk.clone())
             .map_err(|error| AcmeError::from(format!("Invalid JWK JSON: {error}")))?;
@@ -221,6 +216,7 @@ pub async fn renew_cert_from_db(
         hosted,
         enforce_throttle,
         cfg.file_challenge()?,
+        &AcmeClient::new(None, &cfg.http)?,
     )
     .await
 }
@@ -232,6 +228,7 @@ pub async fn renew_cert_from_db_with_challenge(
     hosted: HostedCertificate,
     enforce_throttle: bool,
     challenge: OrderChallenge<'_>,
+    client: &AcmeClient,
 ) -> Result<(Certificate, String), AcmeError> {
     renew_with_client(
         acme_store,
@@ -240,7 +237,7 @@ pub async fn renew_cert_from_db_with_challenge(
         hosted,
         enforce_throttle,
         challenge,
-        acme_client,
+        client,
     )
     .await
 }
@@ -252,7 +249,7 @@ async fn renew_with_client(
     hosted: HostedCertificate,
     enforce_throttle: bool,
     challenge: OrderChallenge<'_>,
-    make_client: impl FnOnce() -> Result<AcmeClient, AcmeError>,
+    http: &AcmeClient,
 ) -> Result<(Certificate, String), AcmeError> {
     let start_time = Instant::now();
     let cert = hosted.certificate;
@@ -308,7 +305,7 @@ async fn renew_with_client(
             &organization,
         )?;
         let client = CertClient::with_client(
-            make_client()?,
+            http.clone(),
             &account.private_key,
             &account.url,
         )
@@ -368,6 +365,7 @@ pub async fn renew_cert_to_db(
         renew_before,
         enforce_throttle,
         cfg.file_challenge()?,
+        &AcmeClient::new(None, &cfg.http)?,
     )
     .await
 }
@@ -380,6 +378,7 @@ pub async fn renew_cert_to_db_with_challenge(
     renew_before: Option<std::time::Duration>,
     enforce_throttle: bool,
     challenge: OrderChallenge<'_>,
+    client: &AcmeClient,
 ) -> Result<(Certificate, String), AcmeError> {
     let hosted = hosting
         .certificate_by_cn(cn.as_str())
@@ -409,6 +408,7 @@ pub async fn renew_cert_to_db_with_challenge(
         hosted,
         enforce_throttle,
         challenge,
+        client,
     )
     .await
 }

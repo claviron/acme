@@ -40,7 +40,7 @@ impl Reply {
 pub(super) async fn start(
     token: &str,
     hold_challenge: bool,
-) -> (reqwest::Client, Mock) {
+) -> (crate::clients::AcmeClient, Mock) {
     let mut order = Reply::new(
         "/acme/new-order",
         201,
@@ -64,7 +64,9 @@ pub(super) async fn start(
     .await
 }
 
-pub(super) async fn scripted(replies: Vec<Reply>) -> (reqwest::Client, Mock) {
+pub(super) async fn scripted(
+    replies: Vec<Reply>
+) -> (crate::clients::AcmeClient, Mock) {
     let listener =
         TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -81,7 +83,7 @@ pub(super) async fn scripted(replies: Vec<Reply>) -> (reqwest::Client, Mock) {
 pub(super) fn direct(
     listener: TcpListener,
     replies: Vec<Reply>,
-) -> (reqwest::Client, Mock) {
+) -> (crate::clients::AcmeClient, Mock) {
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     serve(listener, client, replies)
 }
@@ -90,7 +92,7 @@ fn serve(
     listener: TcpListener,
     client: reqwest::Client,
     replies: Vec<Reply>,
-) -> (reqwest::Client, Mock) {
+) -> (crate::clients::AcmeClient, Mock) {
     let (entered, receiver) = oneshot::channel();
     let task = tokio::spawn(async move {
         let base = url::Url::parse("http://issuer.test").unwrap();
@@ -147,7 +149,10 @@ fn serve(
             stream.write_all(response.as_bytes()).await.unwrap();
         }
     });
-    (client, Mock { task, entered: receiver })
+    (
+        crate::clients::AcmeClient::fixed(client),
+        Mock { task, entered: receiver },
+    )
 }
 
 pub(super) fn order_replies(

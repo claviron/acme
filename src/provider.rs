@@ -44,6 +44,16 @@ pub struct AcmeProvider {
     #[cfg(feature = "http-0")]
     pub(crate) http01:
         std::sync::Mutex<Option<Arc<crate::methods::http01::Http01Layer>>>,
+    /// The fleet's client admission table, where the application registered
+    /// it; `http.pool.scope: fleet` needs it.
+    admission: Option<Arc<claviron::orbit::ClientAdmissionProvider>>,
+    /// This process's client to the CA, kept while `http:` is unchanged.
+    client: std::sync::Mutex<
+        Option<(
+            claviron::clients::HttpClientConfig,
+            crate::clients::AcmeClient,
+        )>,
+    >,
     worker: bool,
 }
 
@@ -60,12 +70,51 @@ impl AcmeProvider {
             tls_alpn_answer: None,
             #[cfg(feature = "http-0")]
             http01: std::sync::Mutex::default(),
+            admission: None,
+            client: std::sync::Mutex::default(),
             worker: false,
         }
     }
 
     pub fn snapshot(&self) -> Option<Arc<AcmeConfig>> {
         self.snapshot.load_full()
+    }
+
+    /// This process's client to the CA, as `acme.yaml`'s `http:` declares it;
+    /// `None` while ACME is off.
+    pub fn client(&self) -> Option<crate::clients::AcmeClient> {
+        self.client
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .map(|(_, client)| client.clone())
+    }
+
+    /// Keep the client while `http:` is unchanged, so its pool and admission
+    /// carry across a reload that touched something else.
+    fn apply_client(
+        &self,
+        config: Option<&AcmeConfig>,
+    ) {
+        let mut client =
+            self.client.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(config) = config else {
+            *client = None;
+            return;
+        };
+        if client.as_ref().is_some_and(|(http, _)| *http == config.http) {
+            return;
+        }
+        match crate::clients::AcmeClient::new(
+            self.admission.clone(),
+            &config.http,
+        ) {
+            Ok(built) => *client = Some((config.http.clone(), built)),
+            // Validation refused this before it was applied.
+            Err(error) => {
+                tracing::error!(%error, "ACME HTTP client not rebuilt")
+            }
+        }
     }
 
     /// Resolve an explicit order method, else the one `acme.method` chose.
@@ -132,6 +181,7 @@ impl AcmeProvider {
         {
             *prepared = None;
         }
+        self.apply_client(config.as_ref());
         match config {
             Some(cfg) => {
                 self.snapshot.store(Some(Arc::new(cfg.clone())));
@@ -178,6 +228,9 @@ impl Register<AppState> for AcmeProvider {
             tls_alpn_answer: state
                 .registry_ref()
                 .resolve::<tlsalpn01::Answer>(),
+            admission: state
+                .registry_ref()
+                .resolve::<claviron::orbit::ClientAdmissionProvider>(),
             ..AcmeProvider::empty(state.config_dir().join(CONFIG_FILE))
         });
         #[cfg(feature = "http-0")]
@@ -258,6 +311,11 @@ impl Configurable for AcmeProvider {
         if let Some(config) = config {
             self.order_challenge(config, None)
                 .map_err(|error| congif::Error::msg(error.to_string()))?;
+            crate::clients::AcmeClient::new(
+                self.admission.clone(),
+                &config.http,
+            )
+            .map_err(|error| congif::Error::msg(error.to_string()))?;
             #[cfg(feature = "tls-alpn-01")]
             if let Some(answer) = &self.tls_alpn_answer {
                 answer.check(config.tls_alpn()).map_err(congif::Error::msg)?;

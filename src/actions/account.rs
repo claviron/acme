@@ -3,7 +3,7 @@ use std::fs;
 use tracing::error;
 
 use crate::account::{ACCOUNT_FILE_NAME, Account};
-use crate::clients::{AccountClient, acme_client};
+use crate::clients::{AccountClient, AcmeClient};
 use crate::cryptex::keys;
 use crate::error::AcmeError;
 
@@ -25,7 +25,8 @@ pub async fn new_account(account: &mut Account) -> Result<(), AcmeError> {
 
     let (key, jwk) = keys::generate_acme_key_with_jwk(&account.alg)?;
 
-    let http_client = acme_client()?;
+    // One command, one request at a time: ACME's default HTTP.
+    let http_client = AcmeClient::new(None, &crate::config::default_http())?;
 
     let client = AccountClient::with_client(http_client, &account.url);
 

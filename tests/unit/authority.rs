@@ -110,7 +110,7 @@ async fn dns01_waits_for_visibility_before_asking_the_ca() {
 
 #[test]
 fn acme_authority_rejects_invalid_account_urls_without_panicking() {
-    let http = AcmeClient::builder().no_proxy().build().unwrap();
+    let http = AcmeClient::new(None, &crate::config::default_http()).unwrap();
     for account in [
         "",
         "not-a-url",
@@ -147,7 +147,7 @@ fn acme_authority_rejects_invalid_account_urls_without_panicking() {
 
 #[test]
 fn acme_authority_preserves_ports_ipv6_and_the_account_binding() {
-    let http = AcmeClient::builder().no_proxy().build().unwrap();
+    let http = AcmeClient::new(None, &crate::config::default_http()).unwrap();
     for (account, origin) in [
         ("http://issuer.test/acme/account/1", "http://issuer.test"),
         ("http://issuer.test:80/acme/account/1", "http://issuer.test"),

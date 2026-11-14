@@ -32,8 +32,8 @@ server = [
 
 [dependencies]
 
-claviron = { version = "0.2.1", default-features = false, features = ["ssl"] }
-claviron-tls = { version = "0.2.4", default-features = false, optional = true }
+claviron = { version = "0.2.5", default-features = false, features = ["ssl", "clients-fleet"] }
+claviron-tls = { version = "0.2.5", default-features = false, optional = true }
 
 sqlx = { version = "0.9", optional = true, features = ["runtime-tokio", "postgres", "uuid", "time"] }
 tokio-util = { version = "0.7", optional = true, features = ["rt"] }

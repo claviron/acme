@@ -86,6 +86,33 @@ max_attempts_per_cn: 3
 Paths are relative to the application working directory. `renew_before` is a
 duration such as `30d`, `72h`, or `1h 30m`; a bare number is refused.
 
+### HTTP to the CA
+
+Unwritten, ACME talks to its CA with one client and one request at a time in
+each process: connect within 10s, answer within 90s, up to 16 requests waiting.
+A busier server, or one that must hold the CA's limits across its fleet,
+declares the `http:` block (Claviron's `HttpClientConfig`):
+
+```yaml
+http:
+  connect_timeout: 10s
+  request_timeout: 90s
+  pool:
+    scope: fleet          # one request budget for the whole fleet; or process
+    min_idle: 0
+    max_idle: 1
+    max_live: 2
+    max_concurrency: 2    # fleet-wide with scope: fleet
+    max_waiting: 16
+```
+
+A request takes the pool's admission for itself alone, so two orders
+interleave and neither waits for the other to finish. `scope: fleet` needs
+the fleet's admission table, which the application registers with
+`claviron::orbit::register_client_admission(state)` before ACME; without it the
+configuration is refused. Renewal runs as many orders at once as
+`max_concurrency` allows.
+
 With this crate's `http-0` feature, `claviron_acme::register(state)` automatically
 registers the serving Routable contribution and non-serving interceptor factory.
 

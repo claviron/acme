@@ -5,7 +5,7 @@ use claviron::ssl::{Sni, generators};
 use tracing::{info, warn};
 
 use super::AcmeError;
-use super::clients::acme_client;
+use super::clients::AcmeClient;
 
 /// Pre-flight HTTP-01 reachability check — runs before kicking off
 /// the real ACME order.
@@ -32,6 +32,7 @@ use super::clients::acme_client;
 /// production; safe to leave off in dev where rate limits don't
 /// matter.
 pub async fn validate_acme_url(
+    client: &AcmeClient,
     challenges_dir: impl AsRef<Path>,
     aliases: &[Sni],
 ) -> Result<(), AcmeError> {
@@ -57,8 +58,6 @@ pub async fn validate_acme_url(
         )
     })?;
 
-    let client = acme_client()?;
-
     for alias in aliases {
         let validate_url = format!(
             "http://{}/.well-known/acme-challenge/{}?_ts={}",
@@ -68,9 +67,9 @@ pub async fn validate_acme_url(
         warn!("trying pre-validation URL {}", validate_url);
 
         let response = client
-            .get(&validate_url)
-            .header("Cache-Control", "no-cache")
-            .send()
+            .send(|client| {
+                client.get(&validate_url).header("Cache-Control", "no-cache")
+            })
             .await?
             .text()
             .await?;

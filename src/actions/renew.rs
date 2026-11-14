@@ -9,7 +9,7 @@ use claviron::ssl::parsers::sanitize_pem_content_to_der;
 use tracing::{debug, error, warn};
 
 use crate::account::Account;
-use crate::clients::{CertClient, acme_client};
+use crate::clients::{AcmeClient, CertClient};
 use crate::meta::CertMeta;
 use crate::{AcmeError, account};
 
@@ -48,7 +48,7 @@ pub async fn renew_cert(
     debug!("CSR file path: {}", csr_path.to_string_lossy().to_string());
 
     // Create the staging client
-    let acme_client = acme_client()?;
+    let acme_client = AcmeClient::new(None, &crate::config::default_http())?;
     let client =
         CertClient::with_client(acme_client, account_key, &account.url)
             .map_err(|e| AcmeError::ClientCreationFailed(e.to_string()))?;
