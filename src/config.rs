@@ -92,21 +92,20 @@ struct Dns01Config {
     check_interval: Duration,
 }
 
-fn deserialize_renew_before<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+/// The renewal window, a duration such as `30d` or `72h`. A bare number names
+/// no unit and is refused rather than read as some unit.
+fn deserialize_renew_before<'de, D>(
+    deserializer: D
+) -> Result<Duration, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum RenewalWindow {
-        Days(u32),
-        Duration(String),
-    }
-
-    match RenewalWindow::deserialize(deserializer)? {
-        RenewalWindow::Days(days) => Ok(Duration::from_secs(u64::from(days) * 86_400)),
-        RenewalWindow::Duration(text) => parse_duration(&text).map_err(serde::de::Error::custom),
-    }
+    let text = String::deserialize(deserializer).map_err(|_| {
+        serde::de::Error::custom(
+            "renew_before is a duration such as 30d or 72h",
+        )
+    })?;
+    parse_duration(&text).map_err(serde::de::Error::custom)
 }
 
 #[cfg(test)]
@@ -114,7 +113,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renewal_window_accepts_hours_and_legacy_days() {
+    fn renewal_window_is_a_duration_with_its_unit() {
         #[derive(Deserialize)]
         struct Config {
             #[serde(deserialize_with = "deserialize_renew_before")]
@@ -122,7 +121,6 @@ mod tests {
         }
 
         for (yaml, secs) in [
-            ("renew_before: 3", 259_200),
             ("renew_before: 3d", 259_200),
             ("renew_before: 72h", 259_200),
             ("renew_before: 3h", 10_800),
@@ -130,7 +128,14 @@ mod tests {
             let config: Config = serde_yaml::from_str(yaml).unwrap();
             assert_eq!(config.renew_before, Duration::from_secs(secs));
         }
-        assert!(serde_yaml::from_str::<Config>("renew_before: -3").is_err());
+        for refused in
+            ["renew_before: 3", "renew_before: -3", "renew_before: 3x"]
+        {
+            assert!(
+                serde_yaml::from_str::<Config>(refused).is_err(),
+                "{refused}"
+            );
+        }
     }
 }
 

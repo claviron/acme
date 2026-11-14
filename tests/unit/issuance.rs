@@ -36,7 +36,7 @@ async fn acme_response_issuance_logs_cover_validation_and_persistence() {
                 "base_dir":root.path(), "challenges_dir":root.path(),
                 "production_url":"http://issuer.test", "staging_url":"http://issuer.test",
                 "organization":{"name":"Example", "email":"operator@example.test"},
-                "pre-validation":false, "renew_before":30, "algorithm":"ES256"
+                "pre-validation":false, "renew_before":"30d", "algorithm":"ES256"
             })).unwrap();
             let pool = sqlx::sqlite::SqlitePoolOptions::new()
                 .max_connections(1)

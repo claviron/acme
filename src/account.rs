@@ -187,7 +187,7 @@ organization:
   unit: Trust
   email: certs@example.test
 pre-validation: false
-renew_before: 30
+renew_before: 30d
 alg: ES256
 "#,
             configured_root.display(),

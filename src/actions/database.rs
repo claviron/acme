@@ -350,13 +350,14 @@ async fn renew_with_client(
     attempt
 }
 
-/// Renew by CN, applying the configured due-date rule before network I/O.
+/// Renew by CN, applying the due-date rule before network I/O: `renew_before`,
+/// or the configured `renew_before` when not given.
 pub async fn renew_cert_to_db(
     acme_store: &AcmeStore,
     hosting: &HostingStore,
     cfg: &AcmeConfig,
     cn: &Sni,
-    renew_before_days: Option<u32>,
+    renew_before: Option<std::time::Duration>,
     enforce_throttle: bool,
 ) -> Result<(Certificate, String), AcmeError> {
     renew_cert_to_db_with_challenge(
@@ -364,7 +365,7 @@ pub async fn renew_cert_to_db(
         hosting,
         cfg,
         cn,
-        renew_before_days,
+        renew_before,
         enforce_throttle,
         cfg.file_challenge()?,
     )
@@ -376,7 +377,7 @@ pub async fn renew_cert_to_db_with_challenge(
     hosting: &HostingStore,
     cfg: &AcmeConfig,
     cn: &Sni,
-    renew_before_days: Option<u32>,
+    renew_before: Option<std::time::Duration>,
     enforce_throttle: bool,
     challenge: OrderChallenge<'_>,
 ) -> Result<(Certificate, String), AcmeError> {
@@ -388,9 +389,7 @@ pub async fn renew_cert_to_db_with_challenge(
             AcmeError::from(format!("Certificate '{}' not found", cn))
         })?;
     acme_account_id(hosting, &hosted.certificate).await?;
-    let renew_before = renew_before_days
-        .map(|days| std::time::Duration::from_secs(u64::from(days) * 86_400))
-        .unwrap_or(cfg.renew_before);
+    let renew_before = renew_before.unwrap_or(cfg.renew_before);
     let remaining = hosted.certificate.expires_at - OffsetDateTime::now_utc();
     if remaining > renew_before {
         return Err(AcmeError::RenewalNotDue {

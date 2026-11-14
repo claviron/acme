@@ -315,7 +315,7 @@ organization:
   city: Example
   email: operator@example.test
 algorithm: ES256
-renew_before: 30
+renew_before: 30d
 method: http-0
 "#,
     )
@@ -338,7 +338,7 @@ production_url: https://ca.example.test
 staging_url: https://staging.example.test
 organization: { name: Example, email: operator@example.test }
 algorithm: ES256
-renew_before: 30
+renew_before: 30d
 method: dns-01
 http-0:
   challenges_dir: storage/acme/shared

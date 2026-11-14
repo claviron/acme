@@ -84,8 +84,7 @@ max_attempts_per_cn: 3
 ```
 
 Paths are relative to the application working directory. `renew_before` is a
-duration such as `30d`, `72h`, or `1h 30m`. Existing integer values are read
-as days.
+duration such as `30d`, `72h`, or `1h 30m`; a bare number is refused.
 
 With this crate's `http-0` feature, `claviron_acme::register(state)` automatically
 registers the serving Routable contribution and non-serving interceptor factory.
