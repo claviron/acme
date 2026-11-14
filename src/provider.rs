@@ -63,17 +63,30 @@ impl AcmeProvider {
         self.snapshot.load_full()
     }
 
-    /// Resolve an explicit order method or use the configured default.
+    /// The method an order without one uses when `acme.method` names none:
+    /// TLS-ALPN-01 once a listener answers it, which needs nothing from the
+    /// site, then HTTP-01 when it is built.
+    pub fn default_method(&self) -> Option<ChallengeMethod> {
+        #[cfg(feature = "tls-alpn-01")]
+        if self.tls_alpn_publisher.is_some() {
+            return Some(ChallengeMethod::TlsAlpn01);
+        }
+        cfg!(feature = "http-0").then_some(ChallengeMethod::Http0)
+    }
+
+    /// Resolve an explicit order method, else the configured one, else
+    /// [`Self::default_method`].
     pub fn order_challenge<'a>(
         &'a self,
         config: &'a AcmeConfig,
         method: Option<ChallengeMethod>,
     ) -> Result<OrderChallenge<'a>, AcmeError> {
-        match method.or(config.method) {
+        match method.or(config.method).or_else(|| self.default_method()) {
+            None => Err("no ACME challenge method: name acme.method, or build http-0 or register a TLS-ALPN-01 listener".into()),
             Some(ChallengeMethod::Http0) if !cfg!(feature = "http-0") => {
                 Err("ACME HTTP-01 requires the http-0 feature".into())
             }
-            None | Some(ChallengeMethod::Http0) => {
+            Some(ChallengeMethod::Http0) => {
                 Ok(OrderChallenge::Http01(config.challenges_dir()))
             }
             Some(ChallengeMethod::Dns01) => {
@@ -270,4 +283,37 @@ impl Reloadable<AppState> for AcmeProvider {
 
 pub fn register(state: &AppState) -> claviron::runtime::registry::Result<()> {
     <AcmeProvider as Register<AppState>>::register(state)
+}
+
+#[cfg(all(test, feature = "http-0", feature = "tls-alpn-01"))]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    struct Listener;
+
+    #[async_trait]
+    impl tlsalpn01::Publisher for Listener {
+        async fn publish(
+            &self,
+            _name: &claviron::ssl::Sni,
+            _config: Arc<rustls::ServerConfig>,
+        ) -> Result<Box<dyn tlsalpn01::Publication>, tlsalpn01::PublishError>
+        {
+            Err("not published in this test".into())
+        }
+    }
+
+    #[test]
+    fn tls_alpn_01_is_the_default_once_a_listener_answers_it() {
+        let site_only = AcmeProvider::empty(PathBuf::from("acme.yaml"));
+        assert_eq!(site_only.default_method(), Some(ChallengeMethod::Http0));
+
+        let answered = AcmeProvider {
+            tls_alpn_publisher: Some(Arc::new(Listener)),
+            ..AcmeProvider::empty(PathBuf::from("acme.yaml"))
+        };
+        assert_eq!(answered.default_method(), Some(ChallengeMethod::TlsAlpn01));
+    }
 }

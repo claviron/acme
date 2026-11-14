@@ -95,9 +95,11 @@ http-0:
   challenges_dir: storage/acme/challenges
 ```
 
-`method` selects the default for issuance and renewal. Rust callers can pass
-`Some(ChallengeMethod::…)` to `AcmeProvider::order_challenge` for one operation.
-Pass `None` to use the default. The `http-0:` block enables the HTTP handler
+`method` selects the default for issuance and renewal. Without it the default
+is what the server can answer: TLS-ALPN-01 once a listener answers it, which
+asks nothing of the sites, else HTTP-01 when `http-0` is built. Rust callers
+can pass `Some(ChallengeMethod::…)` to `AcmeProvider::order_challenge` for one
+operation; `None` takes the default. The `http-0:` block enables the HTTP handler
 for admitted plain HTTP hosts independently of the default. Existing flat
 `challenges_dir` with `method: http-0` continues to work. Plain `non_ssl: serve` plans
 use the prepared Routable layer after host access/quota/body policies. Plain
@@ -182,8 +184,10 @@ publisher.
 
 ### TLS-ALPN-01
 
-Enable `tls-alpn-01` and set `method: tls-alpn-01` in `acme.yaml`.
-Applications can bind their own TLS-ALPN-01 `Publisher`. The built-in
+Enable `tls-alpn-01` and register a listener for it; it is then the default
+method, with no `method:` needed in `acme.yaml`. The CA connects with the ALPN
+protocol `acme-tls/1`, which RFC 8737 fixes and `methods::tlsalpn01::ALPN`
+names. Applications can bind their own TLS-ALPN-01 `Publisher`. The built-in
 `methods::tlsalpn01::register_local(state, listener)` adapter adds an ALPN
 profile for `acme-tls/1` to the Edge's `AlpnProfiles`; it needs an Edge that
 provides them.
