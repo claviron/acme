@@ -97,27 +97,31 @@ async fn acme_response_issuance_logs_cover_validation_and_persistence() {
             }
             let (http, mock) = issuer::scripted(replies).await;
             let result = if let Some(existing) = existing {
-                renew_with_client(
+                renew_cert_from_db_with_challenge(
                     &acme,
                     &hosting,
-                    &cfg,
                     existing,
                     false,
-                    cfg.file_challenge().unwrap(),
-                    &http,
+                    Issuance {
+                        config: &cfg,
+                        client: &http,
+                        challenge: cfg.file_challenge().unwrap(),
+                    },
                 )
                 .await
                 .map(|_| ())
             } else {
-                add_with_client(
+                add_cert_to_db_with_challenge(
                     &acme,
                     &hosting,
                     1,
                     &cn,
                     std::slice::from_ref(&cn),
-                    &cfg,
-                    cfg.file_challenge().unwrap(),
-                    &http,
+                    Issuance {
+                        config: &cfg,
+                        client: &http,
+                        challenge: cfg.file_challenge().unwrap(),
+                    },
                 )
                 .await
                 .map(|_| ())

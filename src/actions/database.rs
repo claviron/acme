@@ -20,6 +20,14 @@ use crate::cryptex::jwk::AcmeJwk;
 use crate::validate::validate_acme_url;
 use crate::{AcmeConfig, AcmeError, AcmeOperation, AcmeStore};
 
+/// How one order reaches its CA: the configuration it follows, the client its
+/// requests go through and the proof it presents.
+pub struct Issuance<'a> {
+    pub config: &'a AcmeConfig,
+    pub client: &'a AcmeClient,
+    pub challenge: OrderChallenge<'a>,
+}
+
 pub struct AddCertificateResult {
     pub certificate: Certificate,
     pub content: String,
@@ -41,39 +49,25 @@ pub async fn add_cert_to_db(
         server_id,
         cn,
         aliases,
-        cfg,
-        cfg.file_challenge()?,
-        &AcmeClient::new(None, &cfg.http)?,
+        Issuance {
+            config: cfg,
+            client: &AcmeClient::new(None, &cfg.http)?,
+            challenge: cfg.file_challenge()?,
+        },
     )
     .await
 }
 
+/// [`add_cert_to_db`], ordered as `issuance` says.
 pub async fn add_cert_to_db_with_challenge(
     acme_store: &AcmeStore,
     hosting: &HostingStore,
     server_id: i32,
     cn: &Sni,
     aliases: &[Sni],
-    cfg: &AcmeConfig,
-    challenge: OrderChallenge<'_>,
-    client: &AcmeClient,
+    issuance: Issuance<'_>,
 ) -> Result<AddCertificateResult, AcmeError> {
-    add_with_client(
-        acme_store, hosting, server_id, cn, aliases, cfg, challenge, client,
-    )
-    .await
-}
-
-async fn add_with_client(
-    acme_store: &AcmeStore,
-    hosting: &HostingStore,
-    server_id: i32,
-    cn: &Sni,
-    aliases: &[Sni],
-    cfg: &AcmeConfig,
-    challenge: OrderChallenge<'_>,
-    http: &AcmeClient,
-) -> Result<AddCertificateResult, AcmeError> {
+    let Issuance { config: cfg, client: http, challenge } = issuance;
     let start_time = Instant::now();
     if let Some(existing) = hosting
         .certificate_by_cn(cn.as_str())
@@ -212,45 +206,26 @@ pub async fn renew_cert_from_db(
     renew_cert_from_db_with_challenge(
         acme_store,
         hosting,
-        cfg,
         hosted,
         enforce_throttle,
-        cfg.file_challenge()?,
-        &AcmeClient::new(None, &cfg.http)?,
+        Issuance {
+            config: cfg,
+            client: &AcmeClient::new(None, &cfg.http)?,
+            challenge: cfg.file_challenge()?,
+        },
     )
     .await
 }
 
+/// [`renew_cert_from_db`], ordered as `issuance` says.
 pub async fn renew_cert_from_db_with_challenge(
     acme_store: &AcmeStore,
     hosting: &HostingStore,
-    cfg: &AcmeConfig,
     hosted: HostedCertificate,
     enforce_throttle: bool,
-    challenge: OrderChallenge<'_>,
-    client: &AcmeClient,
+    issuance: Issuance<'_>,
 ) -> Result<(Certificate, String), AcmeError> {
-    renew_with_client(
-        acme_store,
-        hosting,
-        cfg,
-        hosted,
-        enforce_throttle,
-        challenge,
-        client,
-    )
-    .await
-}
-
-async fn renew_with_client(
-    acme_store: &AcmeStore,
-    hosting: &HostingStore,
-    cfg: &AcmeConfig,
-    hosted: HostedCertificate,
-    enforce_throttle: bool,
-    challenge: OrderChallenge<'_>,
-    http: &AcmeClient,
-) -> Result<(Certificate, String), AcmeError> {
+    let Issuance { config: cfg, client: http, challenge } = issuance;
     let start_time = Instant::now();
     let cert = hosted.certificate;
     let account_id = acme_account_id(hosting, &cert).await?;
@@ -360,25 +335,26 @@ pub async fn renew_cert_to_db(
     renew_cert_to_db_with_challenge(
         acme_store,
         hosting,
-        cfg,
         cn,
         renew_before,
         enforce_throttle,
-        cfg.file_challenge()?,
-        &AcmeClient::new(None, &cfg.http)?,
+        Issuance {
+            config: cfg,
+            client: &AcmeClient::new(None, &cfg.http)?,
+            challenge: cfg.file_challenge()?,
+        },
     )
     .await
 }
 
+/// [`renew_cert_to_db`], ordered as `issuance` says.
 pub async fn renew_cert_to_db_with_challenge(
     acme_store: &AcmeStore,
     hosting: &HostingStore,
-    cfg: &AcmeConfig,
     cn: &Sni,
     renew_before: Option<std::time::Duration>,
     enforce_throttle: bool,
-    challenge: OrderChallenge<'_>,
-    client: &AcmeClient,
+    issuance: Issuance<'_>,
 ) -> Result<(Certificate, String), AcmeError> {
     let hosted = hosting
         .certificate_by_cn(cn.as_str())
@@ -388,7 +364,7 @@ pub async fn renew_cert_to_db_with_challenge(
             AcmeError::from(format!("Certificate '{}' not found", cn))
         })?;
     acme_account_id(hosting, &hosted.certificate).await?;
-    let renew_before = renew_before.unwrap_or(cfg.renew_before);
+    let renew_before = renew_before.unwrap_or(issuance.config.renew_before);
     let remaining = hosted.certificate.expires_at - OffsetDateTime::now_utc();
     if remaining > renew_before {
         return Err(AcmeError::RenewalNotDue {
@@ -404,11 +380,9 @@ pub async fn renew_cert_to_db_with_challenge(
     renew_cert_from_db_with_challenge(
         acme_store,
         hosting,
-        cfg,
         hosted,
         enforce_throttle,
-        challenge,
-        client,
+        issuance,
     )
     .await
 }

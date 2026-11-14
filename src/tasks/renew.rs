@@ -13,7 +13,9 @@ pub async fn acme_renew(
 ) -> TaskResult<()> {
     use crate::AcmeProvider;
     use crate::AcmeStore;
-    use crate::actions::database::renew_cert_from_db_with_challenge;
+    use crate::actions::database::{
+        Issuance, renew_cert_from_db_with_challenge,
+    };
 
     let Some(acme_cfg) = acme_config(&state)? else {
         debug!("acme_renew: acme.yaml missing; skipping");
@@ -99,11 +101,9 @@ pub async fn acme_renew(
                 renew_cert_from_db_with_challenge(
                     &acme_store,
                     &hosting,
-                    &cfg,
                     cert,
                     true,
-                    challenge,
-                    &client,
+                    Issuance { config: &cfg, client: &client, challenge },
                 )
                 .await
             }
