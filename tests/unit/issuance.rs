@@ -63,7 +63,7 @@ async fn acme_response_issuance_logs_cover_validation_and_persistence() {
                                 issuer_id: Some(1),
                                 cn: cn.to_string(),
                                 certs_der: original_der.clone(),
-                                key_der: key.serialize_der(),
+                                key_der: Some(key.serialize_der()),
                                 expires_at: OffsetDateTime::now_utc(),
                                 issued_at: OffsetDateTime::now_utc(),
                                 enabled: true,

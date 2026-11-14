@@ -36,7 +36,13 @@ pub async fn add_cert_to_db(
     cfg: &AcmeConfig,
 ) -> Result<AddCertificateResult, AcmeError> {
     add_cert_to_db_with_challenge(
-        acme_store, hosting, server_id, cn, aliases, cfg, cfg.file_challenge()?,
+        acme_store,
+        hosting,
+        server_id,
+        cn,
+        aliases,
+        cfg,
+        cfg.file_challenge()?,
     )
     .await
 }
@@ -168,7 +174,7 @@ async fn add_with_client(
                     issuer_id: Some(issuer.id),
                     cn: cn.to_string(),
                     certs_der,
-                    key_der: private_key.serialize_der(),
+                    key_der: Some(private_key.serialize_der()),
                     expires_at,
                     issued_at: OffsetDateTime::now_utc(),
                     enabled: true,
@@ -209,7 +215,12 @@ pub async fn renew_cert_from_db(
     enforce_throttle: bool,
 ) -> Result<(Certificate, String), AcmeError> {
     renew_cert_from_db_with_challenge(
-        acme_store, hosting, cfg, hosted, enforce_throttle, cfg.file_challenge()?,
+        acme_store,
+        hosting,
+        cfg,
+        hosted,
+        enforce_throttle,
+        cfg.file_challenge()?,
     )
     .await
 }
@@ -281,6 +292,13 @@ async fn renew_with_client(
     // pending refuses the next renewal of this CN.
     let key_der = cert.key_der.clone();
     let attempt = async {
+        // A renewal keeps the certificate's key; one held elsewhere cannot.
+        let key_der = key_der.ok_or_else(|| {
+            AcmeError::from(format!(
+                "certificate '{}' has no private key on this server",
+                cert.cn
+            ))
+        })?;
         let private_key = read_private_key_from_der(&key_der)?;
         let organization = Organization::from_name(&account.organization);
         let csr = generate_server_csr(
@@ -342,7 +360,13 @@ pub async fn renew_cert_to_db(
     enforce_throttle: bool,
 ) -> Result<(Certificate, String), AcmeError> {
     renew_cert_to_db_with_challenge(
-        acme_store, hosting, cfg, cn, renew_before_days, enforce_throttle, cfg.file_challenge()?,
+        acme_store,
+        hosting,
+        cfg,
+        cn,
+        renew_before_days,
+        enforce_throttle,
+        cfg.file_challenge()?,
     )
     .await
 }
@@ -379,7 +403,15 @@ pub async fn renew_cert_to_db_with_challenge(
     } else {
         debug!(cn = %cn, remaining = ?remaining.unsigned_abs(), "renewing certificate");
     }
-    renew_cert_from_db_with_challenge(acme_store, hosting, cfg, hosted, enforce_throttle, challenge).await
+    renew_cert_from_db_with_challenge(
+        acme_store,
+        hosting,
+        cfg,
+        hosted,
+        enforce_throttle,
+        challenge,
+    )
+    .await
 }
 
 /// Renewing a CN is refused while a renewal of it succeeded within the
