@@ -1,19 +1,78 @@
 use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use claviron::runtime::{AppState, registry};
 use claviron::ssl::Sni;
 use claviron_tls::handshake::{AlpnProfile, AlpnProfiles};
 use rustls::{ServerConfig, server::ClientHello};
 
-use super::{ALPN, Publication, PublishError, Publisher};
+use super::{Publication, PublishError, Publisher};
 
 type Challenges = RwLock<HashMap<Sni, Arc<ServerConfig>>>;
 
 struct Local {
     listener: String,
     challenges: Arc<Challenges>,
+}
+
+/// The listener's profile, answering the ALPN id `acme.yaml` names.
+struct LocalProfile {
+    local: Arc<Local>,
+    protocols: Box<[Box<[u8]>]>,
+}
+
+/// A listener opted in by [`register_local`], answering once `acme.yaml` is
+/// applied and names its ALPN id.
+pub(crate) struct Answer {
+    local: Arc<Local>,
+    profiles: Arc<AlpnProfiles>,
+    answering: OnceLock<Box<[u8]>>,
+}
+
+impl Answer {
+    /// Answer `alpn` on the listener. The id is registered once, when the
+    /// configuration is first applied; a later change takes a restart.
+    pub(crate) fn answer(
+        &self,
+        alpn: &[u8],
+    ) -> Result<(), String> {
+        if let Some(answering) = self.answering.get() {
+            return Self::unchanged(answering, alpn);
+        }
+        let profile = LocalProfile {
+            local: self.local.clone(),
+            protocols: Box::new([Box::from(alpn)]),
+        };
+        self.profiles
+            .register(Arc::new(profile))
+            .map_err(|conflict| conflict.to_string())?;
+        let _ = self.answering.set(Box::from(alpn));
+        Ok(())
+    }
+
+    /// Whether a configuration about to be applied keeps the id answered.
+    pub(crate) fn check(
+        &self,
+        alpn: &[u8],
+    ) -> Result<(), String> {
+        match self.answering.get() {
+            Some(answering) => Self::unchanged(answering, alpn),
+            None => Ok(()),
+        }
+    }
+
+    fn unchanged(
+        answering: &[u8],
+        alpn: &[u8],
+    ) -> Result<(), String> {
+        if answering == alpn {
+            Ok(())
+        } else {
+            Err("tls-alpn-01.alpn changed; a new ALPN id takes a restart"
+                .into())
+        }
+    }
 }
 
 /// Opt a standalone application's named TCP TLS listener into TLS-ALPN-01.
@@ -41,78 +100,18 @@ pub fn register_local(
     let local = Arc::new(Local { listener, challenges: Arc::default() });
     registry.insert(local.clone())?;
     registry.bind_dyn::<dyn Publisher, Local>(|local| local)?;
-    profiles
-        .register(local)
-        .map_err(|conflict| registry::Error::msg(conflict.to_string()))?;
+    // The profile is registered when ACME's configuration names its id.
+    registry.insert(Arc::new(Answer {
+        local,
+        profiles,
+        answering: OnceLock::new(),
+    }))?;
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rustls::pki_types::ServerName;
-    use std::io::Cursor;
-
-    fn select(
-        local: &Local,
-        listener: &str,
-        sni: &'static str,
-        alpns: &[&[u8]],
-    ) -> io::Result<Option<Arc<ServerConfig>>> {
-        let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
-            claviron_tls::policy::provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_root_certificates(rustls::RootCertStore::empty())
-        .with_no_client_auth();
-        config.alpn_protocols =
-            alpns.iter().map(|alpn| alpn.to_vec()).collect();
-        let mut client = rustls::ClientConnection::new(
-            Arc::new(config),
-            ServerName::try_from(sni).unwrap(),
-        )
-        .unwrap();
-        let mut bytes = Vec::new();
-        client.write_tls(&mut bytes).unwrap();
-        let mut acceptor = rustls::server::Acceptor::default();
-        acceptor.read_tls(&mut Cursor::new(bytes)).unwrap();
-        let hello = acceptor.accept().unwrap().unwrap();
-        local.handshake(listener, &hello.client_hello())
-    }
-
-    #[tokio::test]
-    async fn challenge_requires_its_listener_sni_and_solo_alpn() {
-        let local =
-            Local { listener: "public".into(), challenges: Arc::default() };
-        let name = "example.test".parse().unwrap();
-        let config =
-            super::super::challenge_config(&name, "token.thumbprint").unwrap();
-        let active = local.publish(&name, config.clone()).await.unwrap();
-        assert!(Arc::ptr_eq(
-            &config,
-            &select(&local, "public", "example.test", &[ALPN])
-                .unwrap()
-                .unwrap()
-        ));
-        assert!(local.publish(&name, config).await.is_err());
-        assert!(
-            select(&local, "other", "example.test", &[ALPN]).unwrap().is_none()
-        );
-        assert!(
-            select(&local, "public", "example.test", &[b"h2", ALPN])
-                .unwrap()
-                .is_none()
-        );
-        assert!(select(&local, "public", "other.test", &[ALPN]).is_err());
-        drop(active);
-        assert!(select(&local, "public", "example.test", &[ALPN]).is_err());
-    }
-}
-
-impl AlpnProfile for Local {
-    fn protocols(&self) -> &[&'static [u8]] {
-        &[ALPN]
+impl AlpnProfile for LocalProfile {
+    fn protocols(&self) -> &[Box<[u8]>] {
+        &self.protocols
     }
 
     fn handshake(
@@ -120,11 +119,24 @@ impl AlpnProfile for Local {
         listener: &str,
         hello: &ClientHello<'_>,
     ) -> io::Result<Option<Arc<ServerConfig>>> {
+        self.local.handshake(listener, hello, &self.protocols[0])
+    }
+}
+
+impl Local {
+    /// The challenge for `hello` when it reached this listener offering
+    /// `alpn` alone, as RFC 8737 has the CA connect.
+    fn handshake(
+        &self,
+        listener: &str,
+        hello: &ClientHello<'_>,
+        alpn: &[u8],
+    ) -> io::Result<Option<Arc<ServerConfig>>> {
         if listener != self.listener {
             return Ok(None);
         }
         let Some(mut offered) = hello.alpn() else { return Ok(None) };
-        if offered.next() != Some(ALPN) || offered.next().is_some() {
+        if offered.next() != Some(alpn) || offered.next().is_some() {
             return Ok(None);
         }
         let name =
@@ -179,5 +191,92 @@ impl Drop for Active {
         if let Ok(mut challenges) = self.challenges.write() {
             challenges.remove(&self.name);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustls::pki_types::ServerName;
+    use std::io::Cursor;
+
+    fn select(
+        local: &Local,
+        listener: &str,
+        sni: &'static str,
+        alpns: &[&[u8]],
+    ) -> io::Result<Option<Arc<ServerConfig>>> {
+        let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            claviron_tls::policy::provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(rustls::RootCertStore::empty())
+        .with_no_client_auth();
+        config.alpn_protocols =
+            alpns.iter().map(|alpn| alpn.to_vec()).collect();
+        let mut client = rustls::ClientConnection::new(
+            Arc::new(config),
+            ServerName::try_from(sni).unwrap(),
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        client.write_tls(&mut bytes).unwrap();
+        let mut acceptor = rustls::server::Acceptor::default();
+        acceptor.read_tls(&mut Cursor::new(bytes)).unwrap();
+        let hello = acceptor.accept().unwrap().unwrap();
+        local.handshake(listener, &hello.client_hello(), ID)
+    }
+
+    const ID: &[u8] = b"acme-tls/1";
+
+    #[test]
+    fn the_listener_answers_the_configured_id_until_a_restart() {
+        let profiles = Arc::new(AlpnProfiles::default());
+        let answer = Answer {
+            local: Arc::new(Local {
+                listener: "public".into(),
+                challenges: Arc::default(),
+            }),
+            profiles: profiles.clone(),
+            answering: OnceLock::new(),
+        };
+        answer.answer(b"example-acme/1").unwrap();
+        // Registered under the configured id: a second claim conflicts.
+        let claim = LocalProfile {
+            local: answer.local.clone(),
+            protocols: Box::new([Box::from(&b"example-acme/1"[..])]),
+        };
+        assert!(profiles.register(Arc::new(claim)).is_err());
+        answer.answer(b"example-acme/1").unwrap();
+        assert!(answer.check(b"acme-tls/1").is_err());
+        assert!(answer.check(b"example-acme/1").is_ok());
+    }
+
+    #[tokio::test]
+    async fn challenge_requires_its_listener_sni_and_solo_alpn() {
+        let local =
+            Local { listener: "public".into(), challenges: Arc::default() };
+        let name = "example.test".parse().unwrap();
+        let config =
+            super::super::challenge_config(&name, "token.thumbprint", ID)
+                .unwrap();
+        let active = local.publish(&name, config.clone()).await.unwrap();
+        assert!(Arc::ptr_eq(
+            &config,
+            &select(&local, "public", "example.test", &[ID]).unwrap().unwrap()
+        ));
+        assert!(local.publish(&name, config).await.is_err());
+        assert!(
+            select(&local, "other", "example.test", &[ID]).unwrap().is_none()
+        );
+        assert!(
+            select(&local, "public", "example.test", &[b"h2", ID])
+                .unwrap()
+                .is_none()
+        );
+        assert!(select(&local, "public", "other.test", &[ID]).is_err());
+        drop(active);
+        assert!(select(&local, "public", "example.test", &[ID]).is_err());
     }
 }

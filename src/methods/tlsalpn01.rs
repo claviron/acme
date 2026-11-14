@@ -11,8 +11,6 @@ use sha2::{Digest, Sha256};
 
 use crate::AcmeError;
 
-pub const ALPN: &[u8] = b"acme-tls/1";
-
 pub type PublishError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Owns one active proof. Dropping it withdraws the proof.
@@ -30,9 +28,12 @@ pub trait Publisher: Send + Sync {
     ) -> Result<Box<dyn Publication>, PublishError>;
 }
 
+/// The handshake answering one challenge for `name` on the ALPN id `alpn`,
+/// `tls-alpn-01.alpn`.
 pub(crate) fn challenge_config(
     name: &Sni,
     key_authorization: &str,
+    alpn: &[u8],
 ) -> Result<Arc<ServerConfig>, AcmeError> {
     fn error(error: impl std::fmt::Display) -> AcmeError {
         AcmeError::from(format!("TLS-ALPN-01 certificate: {error}"))
@@ -61,7 +62,7 @@ pub(crate) fn challenge_config(
         .map_err(error)?
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(SingleCertAndKey::from(certified_key)));
-    config.alpn_protocols = vec![ALPN.to_vec()];
+    config.alpn_protocols = vec![alpn.to_vec()];
     config.session_storage =
         Arc::new(rustls::server::NoServerSessionStorage {});
     config.send_tls13_tickets = 0;
@@ -69,4 +70,5 @@ pub(crate) fn challenge_config(
 }
 
 mod local;
+pub(crate) use local::Answer;
 pub use local::register_local;

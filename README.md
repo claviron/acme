@@ -184,11 +184,19 @@ publisher.
 ### TLS-ALPN-01
 
 Enable `tls-alpn-01` and set `method: tls-alpn-01` in `acme.yaml`. The CA
-connects with the ALPN protocol `acme-tls/1`, which RFC 8737 fixes.
+connects with an ALPN protocol id, RFC 8737's `acme-tls/1` unless the
+optional `tls-alpn-01:` block names another:
+
+```yaml
+tls-alpn-01:
+  alpn: acme-tls/1     # the default
+```
+
 Applications can bind their own TLS-ALPN-01 `Publisher`. The built-in
-`methods::tlsalpn01::register_local(state, listener)` adapter adds an ALPN
-profile for `acme-tls/1` to the Edge's `AlpnProfiles`; it needs an Edge that
-provides them.
+`methods::tlsalpn01::register_local(state, listener)` adapter opts a listener
+in; when `acme.yaml` is applied it adds an ALPN profile for the configured id
+to the Edge's `AlpnProfiles`, so it needs an Edge that provides them. A
+changed id takes a restart.
 The named TCP TLS listener must accept the CA's connection on port 443.
 A supervised application supplies a publisher and handshake selector that
 make each proof visible across its accepting workers before returning the

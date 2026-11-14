@@ -38,6 +38,9 @@ pub struct AcmeProvider {
     txt_publisher: Option<Arc<dyn TxtPublisher>>,
     #[cfg(feature = "tls-alpn-01")]
     tls_alpn_publisher: Option<Arc<dyn tlsalpn01::Publisher>>,
+    /// A listener `register_local` opted in, answering the configured id.
+    #[cfg(feature = "tls-alpn-01")]
+    tls_alpn_answer: Option<Arc<tlsalpn01::Answer>>,
     #[cfg(feature = "http-0")]
     pub(crate) http01:
         std::sync::Mutex<Option<Arc<crate::methods::http01::Http01Layer>>>,
@@ -53,6 +56,8 @@ impl AcmeProvider {
             txt_publisher: None,
             #[cfg(feature = "tls-alpn-01")]
             tls_alpn_publisher: None,
+            #[cfg(feature = "tls-alpn-01")]
+            tls_alpn_answer: None,
             #[cfg(feature = "http-0")]
             http01: std::sync::Mutex::default(),
             worker: false,
@@ -103,7 +108,10 @@ impl AcmeProvider {
                 #[cfg(feature = "tls-alpn-01")]
                 {
                     self.tls_alpn_publisher.as_deref()
-                        .map(OrderChallenge::TlsAlpn01)
+                        .map(|publisher| OrderChallenge::TlsAlpn01 {
+                            publisher,
+                            alpn: config.tls_alpn(),
+                        })
                         .ok_or_else(|| "TLS-ALPN-01 requires a registered challenge publisher".into())
                 }
                 #[cfg(not(feature = "tls-alpn-01"))]
@@ -166,6 +174,10 @@ impl Register<AppState> for AcmeProvider {
             tls_alpn_publisher: state
                 .registry_ref()
                 .resolve_dyn::<dyn tlsalpn01::Publisher>(),
+            #[cfg(feature = "tls-alpn-01")]
+            tls_alpn_answer: state
+                .registry_ref()
+                .resolve::<tlsalpn01::Answer>(),
             ..AcmeProvider::empty(state.config_dir().join(CONFIG_FILE))
         });
         #[cfg(feature = "http-0")]
@@ -230,6 +242,11 @@ impl Configurable for AcmeProvider {
         &self,
         config: &Option<AcmeConfig>,
     ) -> congif::Result<()> {
+        // A listener opted into TLS-ALPN-01 answers the id this names.
+        #[cfg(feature = "tls-alpn-01")]
+        if let (Some(answer), Some(config)) = (&self.tls_alpn_answer, config) {
+            answer.answer(config.tls_alpn()).map_err(congif::Error::msg)?;
+        }
         self.apply(config);
         Ok(())
     }
@@ -241,6 +258,10 @@ impl Configurable for AcmeProvider {
         if let Some(config) = config {
             self.order_challenge(config, None)
                 .map_err(|error| congif::Error::msg(error.to_string()))?;
+            #[cfg(feature = "tls-alpn-01")]
+            if let Some(answer) = &self.tls_alpn_answer {
+                answer.check(config.tls_alpn()).map_err(congif::Error::msg)?;
+            }
         }
         Ok(())
     }

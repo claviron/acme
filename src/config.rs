@@ -46,6 +46,8 @@ pub struct AcmeConfig {
     pub method: Option<ChallengeMethod>,
     #[serde(default, rename = "dns-01")]
     dns01: Option<Dns01Config>,
+    #[serde(default, rename = "tls-alpn-01")]
+    tls_alpn01: TlsAlpn01Config,
     production_url: String,
     staging_url: String,
     organization: Organization,
@@ -83,6 +85,39 @@ struct Http01Config {
     challenges_dir: PathBuf,
 }
 
+/// The `tls-alpn-01:` block. Unwritten, every field is its default.
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct TlsAlpn01Config {
+    /// The ALPN protocol id the CA connects with; RFC 8737's by default.
+    #[serde(default = "rfc8737_alpn", deserialize_with = "deserialize_alpn")]
+    alpn: Box<[u8]>,
+}
+
+impl Default for TlsAlpn01Config {
+    fn default() -> Self {
+        Self { alpn: rfc8737_alpn() }
+    }
+}
+
+fn rfc8737_alpn() -> Box<[u8]> {
+    Box::from(&b"acme-tls/1"[..])
+}
+
+/// An ALPN protocol id: 1 to 255 bytes, written as text.
+fn deserialize_alpn<'de, D>(deserializer: D) -> Result<Box<[u8]>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let id = String::deserialize(deserializer)?;
+    if id.is_empty() || id.len() > 255 {
+        return Err(serde::de::Error::custom(
+            "tls-alpn-01.alpn is 1 to 255 bytes",
+        ));
+    }
+    Ok(id.into_bytes().into_boxed_slice())
+}
+
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Dns01Config {
@@ -111,6 +146,24 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tls_alpn_01_answers_rfc_8737_unless_configured() {
+        #[derive(Deserialize)]
+        struct Config {
+            #[serde(default, rename = "tls-alpn-01")]
+            tls: TlsAlpn01Config,
+        }
+        let alpn =
+            |yaml| serde_yaml::from_str::<Config>(yaml).map(|c| c.tls.alpn);
+        assert_eq!(&*alpn("{}").unwrap(), b"acme-tls/1");
+        assert_eq!(&*alpn("tls-alpn-01: {}").unwrap(), b"acme-tls/1");
+        assert_eq!(
+            &*alpn("tls-alpn-01: {alpn: example-acme/1}").unwrap(),
+            b"example-acme/1"
+        );
+        assert!(alpn("tls-alpn-01: {alpn: ''}").is_err());
+    }
 
     #[test]
     fn renewal_window_is_a_duration_with_its_unit() {
@@ -148,6 +201,11 @@ fn default_max_attempts_per_cn() -> u8 {
 }
 
 impl AcmeConfig {
+    /// The ALPN protocol id TLS-ALPN-01 answers, `tls-alpn-01.alpn`.
+    pub fn tls_alpn(&self) -> &[u8] {
+        &self.tls_alpn01.alpn
+    }
+
     #[cfg(all(feature = "db", feature = "server"))]
     pub(crate) fn file_challenge(
         &self

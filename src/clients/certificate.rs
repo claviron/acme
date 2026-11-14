@@ -23,7 +23,11 @@ pub enum OrderChallenge<'a> {
     #[cfg(feature = "dns-01")]
     Dns01(Dns01<'a>),
     #[cfg(feature = "tls-alpn-01")]
-    TlsAlpn01(&'a dyn crate::methods::tlsalpn01::Publisher),
+    TlsAlpn01 {
+        publisher: &'a dyn crate::methods::tlsalpn01::Publisher,
+        /// The ALPN id the CA connects with, `tls-alpn-01.alpn`.
+        alpn: &'a [u8],
+    },
 }
 
 impl OrderChallenge<'_> {
@@ -33,7 +37,7 @@ impl OrderChallenge<'_> {
             #[cfg(feature = "dns-01")]
             Self::Dns01(..) => "dns-01",
             #[cfg(feature = "tls-alpn-01")]
-            Self::TlsAlpn01(_) => "tls-alpn-01",
+            Self::TlsAlpn01 { .. } => "tls-alpn-01",
         }
     }
 }
@@ -139,7 +143,7 @@ impl CertClient {
             .collect();
 
         #[cfg(feature = "tls-alpn-01")]
-        if matches!(method, OrderChallenge::TlsAlpn01(_))
+        if matches!(method, OrderChallenge::TlsAlpn01 { .. })
             && identifiers.iter().any(|identifier| {
                 identifier["value"]
                     .as_str()
@@ -187,7 +191,9 @@ impl CertClient {
                 serde_json::from_str(&auth_resp_text)?;
 
             if auth["status"] == "valid" {
-                tracing::info!("ACME authorization already valid; challenge skipped");
+                tracing::info!(
+                    "ACME authorization already valid; challenge skipped"
+                );
                 continue;
             }
 
@@ -251,7 +257,10 @@ impl CertClient {
                         .publish(record.clone())
                         .await
                         .map_err(AcmeError::Dns01)?;
-                    tracing::info!(owner = record.owner(), "DNS-01 TXT record published");
+                    tracing::info!(
+                        owner = record.owner(),
+                        "DNS-01 TXT record published"
+                    );
                     let result = async {
                         tokio::time::timeout(dns.visibility.timeout(), async {
                             publication
@@ -267,9 +276,15 @@ impl CertClient {
                                 record.owner()
                             ))
                         })??;
-                        tracing::info!(owner = record.owner(), "DNS-01 TXT record is visible");
+                        tracing::info!(
+                            owner = record.owner(),
+                            "DNS-01 TXT record is visible"
+                        );
                         self.validate_challenge(challenge_url, &alg).await?;
-                        tracing::info!(owner = record.owner(), "DNS-01 challenge validated");
+                        tracing::info!(
+                            owner = record.owner(),
+                            "DNS-01 challenge validated"
+                        );
                         Ok::<(), AcmeError>(())
                     }
                     .await;
@@ -280,7 +295,7 @@ impl CertClient {
                     result?;
                 }
                 #[cfg(feature = "tls-alpn-01")]
-                OrderChallenge::TlsAlpn01(publisher) => {
+                OrderChallenge::TlsAlpn01 { publisher, alpn } => {
                     let identifier = auth["identifier"]["value"]
                         .as_str()
                         .filter(|_| auth["identifier"]["type"] == "dns" && auth["wildcard"] != true)
@@ -299,6 +314,7 @@ impl CertClient {
                     let config = crate::methods::tlsalpn01::challenge_config(
                         &name,
                         &key_authorization,
+                        alpn,
                     )?;
                     let _publication = publisher
                         .publish(&name, config)
