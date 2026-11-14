@@ -185,8 +185,9 @@ publisher.
 
 Enable `tls-alpn-01` and set `method: tls-alpn-01` in `acme.yaml`.
 Applications can bind their own TLS-ALPN-01 `Publisher`. The built-in
-`methods::tlsalpn01::register_local(state, listener)` adapter requires an Edge
-that consumes `HandshakeSelector`. That Edge integration is unreleased.
+`methods::tlsalpn01::register_local(state, listener)` adapter adds an ALPN
+profile for `acme-tls/1` to the Edge's `AlpnProfiles`; it needs an Edge that
+provides them.
 The named TCP TLS listener must accept the CA's connection on port 443.
 A supervised application supplies a publisher and handshake selector that
 make each proof visible across its accepting workers before returning the

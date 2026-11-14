@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use claviron::runtime::{AppState, registry};
 use claviron::ssl::Sni;
-use claviron_tls::handshake::HandshakeSelector;
+use claviron_tls::handshake::{AlpnProfile, AlpnProfiles};
 use rustls::{ServerConfig, server::ClientHello};
 
 use super::{ALPN, Publication, PublishError, Publisher};
@@ -18,7 +18,7 @@ struct Local {
 
 /// Opt a standalone application's named TCP TLS listener into TLS-ALPN-01.
 /// Call before registering ACME. Supervised applications can bind their own
-/// publisher and selector with cross-process publication.
+/// publisher and ALPN profile with cross-process publication.
 pub fn register_local(
     state: &AppState,
     listener: impl Into<String>,
@@ -35,10 +35,15 @@ pub fn register_local(
         ));
     }
     let registry = state.registry_ref();
-    registry
-        .insert(Arc::new(Local { listener, challenges: Arc::default() }))?;
+    let profiles = registry.resolve::<AlpnProfiles>().ok_or_else(|| {
+        registry::Error::msg("TLS-ALPN-01 requires the Edge's ALPN profiles")
+    })?;
+    let local = Arc::new(Local { listener, challenges: Arc::default() });
+    registry.insert(local.clone())?;
     registry.bind_dyn::<dyn Publisher, Local>(|local| local)?;
-    registry.bind_dyn::<dyn HandshakeSelector, Local>(|local| local)?;
+    profiles
+        .register(local)
+        .map_err(|conflict| registry::Error::msg(conflict.to_string()))?;
     Ok(())
 }
 
@@ -73,7 +78,7 @@ mod tests {
         let mut acceptor = rustls::server::Acceptor::default();
         acceptor.read_tls(&mut Cursor::new(bytes)).unwrap();
         let hello = acceptor.accept().unwrap().unwrap();
-        local.select(listener, &hello.client_hello())
+        local.handshake(listener, &hello.client_hello())
     }
 
     #[tokio::test]
@@ -105,8 +110,12 @@ mod tests {
     }
 }
 
-impl HandshakeSelector for Local {
-    fn select(
+impl AlpnProfile for Local {
+    fn protocols(&self) -> &[&'static [u8]] {
+        &[ALPN]
+    }
+
+    fn handshake(
         &self,
         listener: &str,
         hello: &ClientHello<'_>,
