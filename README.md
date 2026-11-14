@@ -40,8 +40,8 @@ Default features are empty.
 
 ```toml
 [dependencies]
-claviron = { version = "0.2.1", default-features = false, features = ["edge", "postgres", "tasks"] }
-claviron-acme = { version = "0.2.1", features = ["server", "postgres", "tasks"] }
+claviron = { version = "0.2.5", default-features = false, features = ["edge", "postgres", "tasks"] }
+claviron-acme = { version = "0.2.5", features = ["server", "postgres", "tasks"] }
 ```
 
 In the application's registration callback:
