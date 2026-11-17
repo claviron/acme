@@ -1,6 +1,6 @@
 [package]
 name = "claviron-acme"
-version = "0.2.6"
+version = "0.2.7"
 publish = true
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/claviron/acme"
