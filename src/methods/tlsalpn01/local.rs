@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use claviron::runtime::{AppState, registry};
 use claviron::ssl::Sni;
-use claviron_tls::handshake::{AlpnProfile, AlpnProfiles};
+use claviron::tls::handshake::{AlpnProfile, AlpnProfiles};
 use rustls::{ServerConfig, server::ClientHello};
 
 use super::{Publication, PublishError, Publisher};
@@ -207,7 +207,7 @@ mod tests {
         alpns: &[&[u8]],
     ) -> io::Result<Option<Arc<ServerConfig>>> {
         let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
-            claviron_tls::policy::provider(),
+            claviron::tls::policy::provider(),
         ))
         .with_safe_default_protocol_versions()
         .unwrap()

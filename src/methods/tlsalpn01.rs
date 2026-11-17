@@ -46,7 +46,7 @@ pub(crate) fn challenge_config(
         &Sha256::digest(key_authorization),
     ));
     let certificate = params.self_signed(&key).map_err(error)?;
-    let provider = Arc::new(claviron_tls::policy::provider());
+    let provider = Arc::new(claviron::tls::policy::provider());
     let signing_key = provider
         .key_provider
         .load_private_key(PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
@@ -58,7 +58,7 @@ pub(crate) fn challenge_config(
     let certified_key =
         CertifiedKey::new(vec![certificate.der().clone()], signing_key);
     let mut config = ServerConfig::builder_with_provider(provider)
-        .with_protocol_versions(&claviron_tls::policy::versions())
+        .with_protocol_versions(&claviron::tls::policy::versions())
         .map_err(error)?
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(SingleCertAndKey::from(certified_key)));

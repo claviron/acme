@@ -21,7 +21,7 @@ use crate::methods::dns01::{Dns01, TxtRecord};
 pub enum OrderChallenge<'a> {
     Http01(&'a Path),
     #[cfg(feature = "dns-01")]
-    Dns01(Dns01<'a>),
+    Dns01(Box<Dns01<'a>>),
     #[cfg(feature = "tls-alpn-01")]
     TlsAlpn01 {
         publisher: &'a dyn crate::methods::tlsalpn01::Publisher,

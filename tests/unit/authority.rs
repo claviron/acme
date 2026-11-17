@@ -83,14 +83,14 @@ async fn dns01_waits_for_visibility_before_asking_the_ca() {
         client.request_certificate_with_challenge(
             csr.der(),
             &jwk,
-            OrderChallenge::Dns01(Dns01::new(
+            OrderChallenge::Dns01(Box::new(Dns01::new(
                 &publisher,
                 Visibility::new(
                     Duration::from_secs(60),
                     Duration::from_secs(1)
                 )
                 .unwrap()
-            )),
+            ))),
         )
     );
     tokio::select! {

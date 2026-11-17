@@ -4,7 +4,6 @@ version = "0.2.5"
 publish = true
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/claviron/acme"
-homepage = "https://github.com/claviron/acme"
 description = "ACME certificate issuance and renewal for Claviron"
 documentation = "https://docs.rs/claviron-acme"
 keywords = ["acme", "tls", "certificates", "claviron"]
@@ -16,7 +15,7 @@ include = ["src/**", "Cargo.toml", "README.md", "LICENSE-*"]
 default = []
 http-0 = ["server", "claviron/edge", "dep:bytes"]
 dns-01 = []
-tls-alpn-01 = ["server", "dep:claviron-tls", "dep:rcgen", "dep:rustls"]
+tls-alpn-01 = ["server", "claviron/tls", "dep:rcgen", "dep:rustls"]
 resolver = ["claviron/resolver-hickory"]
 db = ["dep:sqlx", "claviron/hosting"]
 postgres = ["db", "claviron/postgres"]
@@ -31,10 +30,7 @@ server = [
 ]
 
 [dependencies]
-
-claviron = { version = "0.2.5", default-features = false, features = ["ssl", "clients-fleet"] }
-claviron-tls = { version = "0.2.5", default-features = false, optional = true }
-
+claviron = { version = "0.2.7", default-features = false, features = ["ssl", "clients-fleet"] }
 sqlx = { version = "0.9", optional = true, features = ["runtime-tokio", "postgres", "uuid", "time"] }
 tokio-util = { version = "0.7", optional = true, features = ["rt"] }
 arc-swap = { version = "1.9", optional = true }

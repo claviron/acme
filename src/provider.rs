@@ -13,12 +13,12 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
+use claviron::orbit::ClientAdmissionProvider;
 use claviron::runtime::congif::{
     self, ConfigFile, ConfigObserver, Configurable,
 };
 use claviron::runtime::registry::{Component, Reloadable, priority};
-use claviron::runtime::{AppState, Register};
-use tracing::info;
+use claviron::runtime::{AppState, Register, registry};
 
 use crate::AcmeError;
 use crate::clients::OrderChallenge;
@@ -46,7 +46,7 @@ pub struct AcmeProvider {
         std::sync::Mutex<Option<Arc<crate::methods::http01::Http01Layer>>>,
     /// The fleet's client admission table, where the application registered
     /// it; `http.pool.scope: fleet` needs it.
-    admission: Option<Arc<claviron::orbit::ClientAdmissionProvider>>,
+    admission: Option<Arc<ClientAdmissionProvider>>,
     /// This process's client to the CA, kept while `http:` is unchanged.
     client: std::sync::Mutex<
         Option<(
@@ -148,7 +148,7 @@ impl AcmeProvider {
                     } else {
                         dns
                     };
-                    Ok(OrderChallenge::Dns01(dns))
+                    Ok(OrderChallenge::Dns01(Box::new(dns)))
                 }
                 #[cfg(not(feature = "dns-01"))]
                 Err("ACME DNS-01 requires the dns-01 feature".into())
@@ -191,7 +191,7 @@ impl AcmeProvider {
                         self.config_path.display()
                     );
                 } else {
-                    info!(
+                    tracing::info!(
                         "📦 AcmeService applied {}",
                         self.config_path.display()
                     );
@@ -210,7 +210,7 @@ impl AcmeProvider {
 
 /// Register ACME configuration and its optional native route contribution.
 impl Register<AppState> for AcmeProvider {
-    fn register(state: &AppState) -> claviron::runtime::registry::Result<()> {
+    fn register(state: &AppState) -> registry::Result<()> {
         #[cfg(not(feature = "http-0"))]
         let registry = state.registry_ref();
         state.bind_config_environment::<Self>()?;
@@ -239,9 +239,7 @@ impl Register<AppState> for AcmeProvider {
                 .registry_ref()
                 .resolve::<claviron::edge::HostAppRegistry>()
                 .ok_or_else(|| {
-                    claviron::runtime::registry::Error::msg(
-                        "HostAppRegistry not registered",
-                    )
+                    registry::Error::msg("HostAppRegistry not registered")
                 })?;
             // TODO: compose non-serving integrations when Edge supports multiple interceptors.
             hosts.bind_non_serving_interception_with(
@@ -345,13 +343,13 @@ impl Reloadable<AppState> for AcmeProvider {
     async fn reload(
         &self,
         state: &AppState,
-    ) -> claviron::runtime::registry::Result<()> {
+    ) -> registry::Result<()> {
         let config = state.config_reader().snapshot::<Self>()?;
         self.apply(&config);
         Ok(())
     }
 }
 
-pub fn register(state: &AppState) -> claviron::runtime::registry::Result<()> {
+pub fn register(state: &AppState) -> registry::Result<()> {
     <AcmeProvider as Register<AppState>>::register(state)
 }
