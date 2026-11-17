@@ -9,7 +9,7 @@
 //! `None`; no HTTP-01 contribution is installed.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
@@ -34,19 +34,14 @@ pub const CONFIG_FILE: &str = "acme.yaml";
 pub struct AcmeProvider {
     config_path: PathBuf,
     snapshot: ArcSwapOption<AcmeConfig>,
-    #[cfg(feature = "dns-01")]
-    txt_publisher: Option<Arc<dyn TxtPublisher>>,
-    #[cfg(feature = "tls-alpn-01")]
-    tls_alpn_publisher: Option<Arc<dyn tlsalpn01::Publisher>>,
-    /// A listener `register_local` opted in, answering the configured id.
-    #[cfg(feature = "tls-alpn-01")]
-    tls_alpn_answer: Option<Arc<tlsalpn01::Answer>>,
+    /// Where the collaborators below are looked up. Weak: the registry owns
+    /// this provider.
+    registry: Weak<registry::Registry<AppState>>,
+    /// Looked up once, the first time a configuration is prepared.
+    collaborators: OnceLock<Collaborators>,
     #[cfg(feature = "http-0")]
     pub(crate) http01:
         std::sync::Mutex<Option<Arc<crate::methods::http01::Http01Layer>>>,
-    /// The fleet's client admission table, registered by `register`;
-    /// `http.pool.scope: fleet` needs it.
-    admission: Option<Arc<ClientAdmissionProvider>>,
     /// This process's client to the CA, kept while `http:` is unchanged.
     client: std::sync::Mutex<
         Option<(
@@ -57,23 +52,58 @@ pub struct AcmeProvider {
     worker: bool,
 }
 
+/// What ACME takes from other registrations. Each is optional: ACME serves
+/// without it, and a configuration that needs a missing one is refused when it
+/// is prepared.
+///
+/// Looked up when the first configuration is prepared, which is after the
+/// application's bootstrap has registered everything, so the order in which
+/// providers register does not matter.
+#[derive(Default)]
+struct Collaborators {
+    /// DNS-01's TXT records, bound by the application as `dyn TxtPublisher`.
+    #[cfg(feature = "dns-01")]
+    txt_publisher: Option<Arc<dyn TxtPublisher>>,
+    #[cfg(feature = "tls-alpn-01")]
+    tls_alpn_publisher: Option<Arc<dyn tlsalpn01::Publisher>>,
+    /// A listener `register_local` opted in, answering the configured id.
+    #[cfg(feature = "tls-alpn-01")]
+    tls_alpn_answer: Option<Arc<tlsalpn01::Answer>>,
+    /// The fleet's client admission table, which `register` registers;
+    /// `http.pool.scope: fleet` needs it.
+    admission: Option<Arc<ClientAdmissionProvider>>,
+}
+
 impl AcmeProvider {
     pub fn empty(config_path: PathBuf) -> Self {
         Self {
             config_path,
             snapshot: ArcSwapOption::empty(),
-            #[cfg(feature = "dns-01")]
-            txt_publisher: None,
-            #[cfg(feature = "tls-alpn-01")]
-            tls_alpn_publisher: None,
-            #[cfg(feature = "tls-alpn-01")]
-            tls_alpn_answer: None,
+            registry: Weak::new(),
+            collaborators: OnceLock::new(),
             #[cfg(feature = "http-0")]
             http01: std::sync::Mutex::default(),
-            admission: None,
             client: std::sync::Mutex::default(),
             worker: false,
         }
+    }
+
+    fn collaborators(&self) -> &Collaborators {
+        self.collaborators.get_or_init(|| {
+            let Some(registry) = self.registry.upgrade() else {
+                return Collaborators::default();
+            };
+            Collaborators {
+                #[cfg(feature = "dns-01")]
+                txt_publisher: registry.resolve_dyn::<dyn TxtPublisher>(),
+                #[cfg(feature = "tls-alpn-01")]
+                tls_alpn_publisher: registry
+                    .resolve_dyn::<dyn tlsalpn01::Publisher>(),
+                #[cfg(feature = "tls-alpn-01")]
+                tls_alpn_answer: registry.resolve::<tlsalpn01::Answer>(),
+                admission: registry.resolve::<ClientAdmissionProvider>(),
+            }
+        })
     }
 
     pub fn snapshot(&self) -> Option<Arc<AcmeConfig>> {
@@ -106,7 +136,7 @@ impl AcmeProvider {
             return;
         }
         match crate::clients::AcmeClient::new(
-            self.admission.clone(),
+            self.collaborators().admission.clone(),
             &config.http,
         ) {
             Ok(built) => *client = Some((config.http.clone(), built)),
@@ -139,6 +169,7 @@ impl AcmeProvider {
                 #[cfg(feature = "dns-01")]
                 {
                     let publisher = self
+                        .collaborators()
                         .txt_publisher
                         .as_deref()
                         .ok_or(AcmeError::MissingTxtPublisher)?;
@@ -156,7 +187,7 @@ impl AcmeProvider {
             Some(ChallengeMethod::TlsAlpn01) => {
                 #[cfg(feature = "tls-alpn-01")]
                 {
-                    self.tls_alpn_publisher.as_deref()
+                    self.collaborators().tls_alpn_publisher.as_deref()
                         .map(|publisher| OrderChallenge::TlsAlpn01 {
                             publisher,
                             alpn: config.tls_alpn(),
@@ -220,21 +251,7 @@ impl Register<AppState> for AcmeProvider {
         claviron::orbit::register_client_admission(state)?;
         let provider = Arc::new(AcmeProvider {
             worker: state.is_worker(),
-            #[cfg(feature = "dns-01")]
-            txt_publisher: state
-                .registry_ref()
-                .resolve_dyn::<dyn TxtPublisher>(),
-            #[cfg(feature = "tls-alpn-01")]
-            tls_alpn_publisher: state
-                .registry_ref()
-                .resolve_dyn::<dyn tlsalpn01::Publisher>(),
-            #[cfg(feature = "tls-alpn-01")]
-            tls_alpn_answer: state
-                .registry_ref()
-                .resolve::<tlsalpn01::Answer>(),
-            admission: state
-                .registry_ref()
-                .resolve::<claviron::orbit::ClientAdmissionProvider>(),
+            registry: Arc::downgrade(&state.registry()),
             ..AcmeProvider::empty(state.config_dir().join(CONFIG_FILE))
         });
         #[cfg(feature = "http-0")]
@@ -299,7 +316,9 @@ impl Configurable for AcmeProvider {
     ) -> congif::Result<()> {
         // A listener opted into TLS-ALPN-01 answers the id this names.
         #[cfg(feature = "tls-alpn-01")]
-        if let (Some(answer), Some(config)) = (&self.tls_alpn_answer, config) {
+        if let (Some(answer), Some(config)) =
+            (&self.collaborators().tls_alpn_answer, config)
+        {
             answer.answer(config.tls_alpn()).map_err(congif::Error::msg)?;
         }
         self.apply(config);
@@ -314,12 +333,12 @@ impl Configurable for AcmeProvider {
             self.order_challenge(config, None)
                 .map_err(|error| congif::Error::msg(error.to_string()))?;
             crate::clients::AcmeClient::new(
-                self.admission.clone(),
+                self.collaborators().admission.clone(),
                 &config.http,
             )
             .map_err(|error| congif::Error::msg(error.to_string()))?;
             #[cfg(feature = "tls-alpn-01")]
-            if let Some(answer) = &self.tls_alpn_answer {
+            if let Some(answer) = &self.collaborators().tls_alpn_answer {
                 answer.check(config.tls_alpn()).map_err(congif::Error::msg)?;
             }
         }
@@ -356,4 +375,57 @@ impl Reloadable<AppState> for AcmeProvider {
 
 pub fn register(state: &AppState) -> registry::Result<()> {
     <AcmeProvider as Register<AppState>>::register(state)
+}
+
+#[cfg(all(test, feature = "dns-01"))]
+mod tests {
+    use super::*;
+    use crate::methods::dns01::{PublishError, TxtPublication, TxtRecord};
+
+    struct Publisher;
+
+    #[async_trait]
+    impl TxtPublisher for Publisher {
+        async fn publish(
+            &self,
+            _: TxtRecord,
+        ) -> Result<Box<dyn TxtPublication>, PublishError> {
+            Err("not used by this test".into())
+        }
+    }
+
+    /// An application may register its DNS-01 publisher after ACME: ACME
+    /// looks it up when a configuration is prepared, not when it registers.
+    #[test]
+    fn a_publisher_registered_after_acme_is_used() {
+        let state = AppState::standalone("acme-collaborators", ".");
+        let provider = AcmeProvider {
+            registry: Arc::downgrade(&state.registry()),
+            ..AcmeProvider::empty("acme.yaml".into())
+        };
+        let registry = state.registry_ref();
+        registry.insert(Arc::new(Publisher)).unwrap();
+        registry
+            .bind_dyn::<dyn TxtPublisher, Publisher>(|publisher| publisher)
+            .unwrap();
+        let config: AcmeConfig = serde_yaml::from_str(
+            r#"
+base_dir: storage/acme
+production_url: https://ca.example.test
+staging_url: https://staging.example.test
+organization: { name: Example, email: operator@example.test }
+algorithm: ES256
+renew_before: 30d
+method: dns-01
+dns-01:
+  visibility_timeout: 60s
+  check_interval: 1s
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            provider.order_challenge(&config, None),
+            Ok(OrderChallenge::Dns01(_))
+        ));
+    }
 }
