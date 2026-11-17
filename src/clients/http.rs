@@ -70,8 +70,8 @@ impl ClientManager for HttpManager {
 pub struct AcmeClient(Arc<AdmittedPool<HttpManager>>);
 
 impl AcmeClient {
-    /// `admission` is the fleet's table when the application registered it;
-    /// `scope: fleet` needs it.
+    /// `admission` is the fleet's table, which ACME registers; `scope: fleet`
+    /// needs it.
     pub fn new(
         admission: Option<Arc<ClientAdmissionProvider>>,
         http: &HttpClientConfig,

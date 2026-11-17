@@ -44,8 +44,8 @@ pub struct AcmeProvider {
     #[cfg(feature = "http-0")]
     pub(crate) http01:
         std::sync::Mutex<Option<Arc<crate::methods::http01::Http01Layer>>>,
-    /// The fleet's client admission table, where the application registered
-    /// it; `http.pool.scope: fleet` needs it.
+    /// The fleet's client admission table, registered by `register`;
+    /// `http.pool.scope: fleet` needs it.
     admission: Option<Arc<ClientAdmissionProvider>>,
     /// This process's client to the CA, kept while `http:` is unchanged.
     client: std::sync::Mutex<
@@ -214,6 +214,10 @@ impl Register<AppState> for AcmeProvider {
         #[cfg(not(feature = "http-0"))]
         let registry = state.registry_ref();
         state.bind_config_environment::<Self>()?;
+        // `http.pool.scope: fleet` holds the CA's request budget in the
+        // fleet's client admission table. ACME is what uses it, so ACME
+        // registers it; a table already registered is kept.
+        claviron::orbit::register_client_admission(state)?;
         let provider = Arc::new(AcmeProvider {
             worker: state.is_worker(),
             #[cfg(feature = "dns-01")]

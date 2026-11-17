@@ -107,10 +107,9 @@ http:
 ```
 
 A request takes the pool's admission for itself alone, so two orders
-interleave and neither waits for the other to finish. `scope: fleet` needs
-the fleet's admission table, which the application registers with
-`claviron::orbit::register_client_admission(state)` before ACME; without it the
-configuration is refused. Renewal runs as many orders at once as
+interleave and neither waits for the other to finish. `scope: fleet` holds
+the budget in the fleet's admission table, which ACME registers itself; the
+application has nothing to add. Renewal runs as many orders at once as
 `max_concurrency` allows.
 
 With this crate's `http-0` feature, `claviron_acme::register(state)` automatically
